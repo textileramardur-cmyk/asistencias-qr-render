@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head">
+  <h2>Importar empleados desde Excel</h2>
+  <p>Alta masiva para no capturar persona por persona como si fuera castigo administrativo.</p>
+</section>
+
+<section class="card">
+  <div class="actions">
+    <a class="btn secondary" href="/plantilla-empleados.xlsx">Descargar plantilla Excel</a>
+  </div>
+
+  <form class="form-stack" action="/importar" method="post" enctype="multipart/form-data">
+    <label>Archivo Excel (.xlsx)
+      <input type="file" name="archivo" accept=".xlsx" required />
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="actualizar" value="1" />
+      Actualizar empleados existentes si el ID ya existe
+    </label>
+    <button class="btn primary" type="submit">Validar e importar</button>
+  </form>
+</section>
+
+{% if result %}
+<section class="card">
+  {% if result.ok %}
+    <div class="result ok">
+      <strong>Importación correcta.</strong><br>
+      Filas leídas: {{ result.leidos }} · Nuevos: {{ result.nuevos }} · Actualizados: {{ result.actualizados }}
+    </div>
+  {% else %}
+    <div class="result error">
+      <strong>No se importó nada. Corrige el Excel.</strong><br>
+      {% if result.total_errors %}Errores totales: {{ result.total_errors }}{% endif %}
+      <ul>
+        {% for err in result.errors %}<li>{{ err }}</li>{% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Módulo de QR</h2>
+    <p>Genera QR simple, imagen de credencial para celular e impresión masiva.</p>
+  </div>
+  <button class="btn primary" onclick="window.print()">Imprimir QRs</button>
+</section>
+
+<section class="qr-grid">
+  {% for emp in employees %}
+  <article class="qr-card-print card">
+    <img src="/qr/{{ emp.id }}.png" alt="QR {{ emp.id }}" />
+    <h3>{{ emp.nombre }}</h3>
+    <p>{{ emp.id }} · {{ emp.area }} · {{ emp.turno }}</p>
+    <div class="actions no-print">
+      <a class="btn small secondary" href="/qr/{{ emp.id }}.png" target="_blank">QR PNG</a>
+      <a class="btn small primary" href="/qr/card/{{ emp.id }}.png" target="_blank">Imagen celular</a>
+    </div>
+  </article>
+  {% else %}
+  <div class="card">No hay empleados registrados.</div>
+  {% endfor %}
+</section>
+{% endblock %}

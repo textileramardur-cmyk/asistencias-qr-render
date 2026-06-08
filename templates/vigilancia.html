@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head">
+  <h2>Vigilancia</h2>
+  <p>Mobile First: escanear QR, validar foto registrada del empleado y capturar fotos del vehículo cuando aplique.</p>
+</section>
+
+<div class="vigilancia-grid">
+  <section class="card scan-card">
+    <h3>1. Escanear QR</h3>
+    <p class="muted">El QR trae solo el ID del empleado. También puedes escribirlo manualmente, porque los celulares a veces deciden tener carácter.</p>
+
+    <div id="reader" class="qr-reader"></div>
+    <button class="btn secondary" type="button" onclick="toggleScanner()">Activar / detener cámara QR</button>
+
+    <label>ID empleado</label>
+    <input id="employeeId" value="EMP-000123" autocomplete="off" />
+
+    <label>Movimiento</label>
+    <select id="movementType" onchange="syncMovementUI()">
+      <option value="entrada">Entrada</option>
+      <option value="salida">Salida</option>
+    </select>
+
+    <label>Guardia</label>
+    <input id="guardName" value="Vigilancia" />
+
+    <button class="btn primary" type="button" onclick="loadEmployee()">Buscar empleado</button>
+  </section>
+
+  <section id="employeeCard" class="card employee-card hidden">
+    <div class="employee-header">
+      <div id="employeePhoto" class="employee-photo">👤</div>
+      <div>
+        <h3 id="empName">Empleado</h3>
+        <p id="empMeta" class="muted">Área · Puesto</p>
+        <span id="empStatus" class="badge ok">Activo</span>
+      </div>
+    </div>
+
+    <div class="data-grid">
+      <div><small>ID</small><strong id="empId">-</strong></div>
+      <div><small>Turno</small><strong id="empTurno">-</strong></div>
+      <div><small>Vehículo configurado</small><strong id="empVehicle">-</strong></div>
+      <div><small>Registro abierto</small><strong id="empOpen">-</strong></div>
+    </div>
+
+    <div class="alert info">
+      El personal NO se fotografía. El vigilante valida visualmente contra la foto registrada en el expediente.
+    </div>
+
+    <form id="attendanceForm" class="form-stack">
+      <input type="hidden" id="formEmployeeId" name="employee_id" />
+      <input type="hidden" id="formMovement" name="movimiento" value="entrada" />
+
+      <input type="hidden" id="formGuardia" name="guardia" />
+
+      <label class="check-row">
+        <input type="checkbox" id="vehicleCheck" name="vehiculo" value="1" onchange="syncVehicleUI()" />
+        Entró/sale con vehículo
+      </label>
+
+      <section id="vehiclePhotos" class="vehicle-panel hidden">
+        <h3>Fotos del vehículo</h3>
+        <p class="muted">Sin placa como dato. Solo evidencia visual del vehículo y cajuela.</p>
+        <div class="photo-grid">
+          <label class="photo-box">
+            <span>🚘</span>
+            Foto frontal del vehículo
+            <input type="file" name="foto_frontal" accept="image/*" capture="environment" />
+          </label>
+          <label class="photo-box">
+            <span>🧳</span>
+            Foto de cajuela
+            <input type="file" name="foto_cajuela" accept="image/*" capture="environment" />
+          </label>
+        </div>
+      </section>
+
+      <section id="latePanel" class="incident-panel">
+        <label>Motivo de retardo, si aplica</label>
+        <select name="motivo_retardo">
+          <option value="">Sin retardo / No aplica</option>
+          <option>Tráfico</option>
+          <option>Transporte</option>
+          <option>Clima</option>
+          <option>Cita médica</option>
+          <option>Permiso autorizado</option>
+          <option>Otro</option>
+        </select>
+      </section>
+
+      <section id="earlyPanel" class="incident-panel hidden">
+        <label>Motivo de salida temprana, si aplica</label>
+        <select name="motivo_salida_temprana">
+          <option value="">Salida normal / No aplica</option>
+          <option>Permiso autorizado</option>
+          <option>Cita médica</option>
+          <option>Enfermedad</option>
+          <option>Emergencia familiar</option>
+          <option>Comisión externa</option>
+          <option>Otro</option>
+        </select>
+      </section>
+
+      <label>Observaciones</label>
+      <textarea name="observaciones" rows="3" placeholder="Opcional"></textarea>
+
+      <div id="resultBox" class="result hidden"></div>
+
+      <button class="btn primary sticky-action" type="submit">Registrar movimiento</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/html5-qrcode" defer></script>
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('attendanceForm');
+    form.addEventListener('submit', submitAttendance);
+    syncMovementUI();
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Personal</h2>
+    <p>Alta, edición y configuración de QR/vehículo.</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="/importar">Importar Excel</a>
+    <a class="btn secondary" href="/exportar/empleados.xlsx">Exportar empleados</a>
+    <a class="btn primary" href="/personal/nuevo">Nuevo empleado</a>
+  </div>
+</section>
+
+<section class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Nombre</th><th>Área</th><th>Turno</th><th>Vehículo</th><th>QR</th><th>Acciones</th></tr>
+      </thead>
+      <tbody>
+        {% for emp in employees %}
+        <tr>
+          <td><strong>{{ emp.id }}</strong></td>
+          <td>{{ emp.nombre }}<br><small>{{ emp.puesto }}</small></td>
+          <td>{{ emp.area }}</td>
+          <td>{{ emp.turno }}</td>
+          <td>{{ 'Sí' if emp.tiene_vehiculo else 'No' }}</td>
+          <td>{{ 'Activo' if emp.qr_activo else 'Inactivo' }}</td>
+          <td class="table-actions">
+            <a href="/personal/{{ emp.id }}">Editar</a>
+            <a href="/qr/card/{{ emp.id }}.png" target="_blank">QR celular</a>
+            <a href="/qr/{{ emp.id }}.png" target="_blank">QR PNG</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">No hay empleados registrados.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

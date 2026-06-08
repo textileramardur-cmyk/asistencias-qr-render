@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head">
+  <h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
+  <p>La foto se usa solo para que vigilancia valide visualmente. No se fotografía al personal en entrada/salida.</p>
+</section>
+
+<form class="card form-grid" action="{{ '/personal/' ~ employee.id ~ '/guardar' if employee else '/personal/guardar' }}" method="post" enctype="multipart/form-data">
+  <label>ID empleado
+    <input name="id" value="{{ employee.id if employee else '' }}" {{ 'readonly' if employee else '' }} required />
+  </label>
+  <label>Nombre completo
+    <input name="nombre" value="{{ employee.nombre if employee else '' }}" required />
+  </label>
+  <label>Área
+    <input name="area" value="{{ employee.area if employee else '' }}" />
+  </label>
+  <label>Puesto
+    <input name="puesto" value="{{ employee.puesto if employee else '' }}" />
+  </label>
+  <label>Turno
+    <select name="turno">
+      <option value="Día" {% if employee and employee.turno == 'Día' %}selected{% endif %}>Día</option>
+      <option value="Noche" {% if employee and employee.turno == 'Noche' %}selected{% endif %}>Noche</option>
+    </select>
+  </label>
+  <label>Estado
+    <select name="estado">
+      {% for estado in ['Activo', 'Inactivo', 'Baja', 'Suspendido'] %}
+      <option value="{{ estado }}" {% if employee and employee.estado == estado %}selected{% endif %}>{{ estado }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Tiene vehículo
+    <select name="tiene_vehiculo">
+      <option value="0" {% if not employee or not employee.tiene_vehiculo %}selected{% endif %}>No</option>
+      <option value="1" {% if employee and employee.tiene_vehiculo %}selected{% endif %}>Sí</option>
+    </select>
+  </label>
+  <label>Requiere fotos de vehículo
+    <select name="requiere_fotos_vehiculo">
+      <option value="0" {% if not employee or not employee.requiere_fotos_vehiculo %}selected{% endif %}>No</option>
+      <option value="1" {% if employee and employee.requiere_fotos_vehiculo %}selected{% endif %}>Sí</option>
+    </select>
+  </label>
+  <label>QR activo
+    <select name="qr_activo">
+      <option value="1" {% if not employee or employee.qr_activo %}selected{% endif %}>Sí</option>
+      <option value="0" {% if employee and not employee.qr_activo %}selected{% endif %}>No</option>
+    </select>
+  </label>
+  <label>Foto registrada del empleado
+    <input type="file" name="foto" accept="image/*" />
+  </label>
+  <label class="full">Observaciones
+    <textarea name="observaciones" rows="4">{{ employee.observaciones if employee else '' }}</textarea>
+  </label>
+
+  {% if employee and employee.foto_path %}
+  <div class="full employee-preview">
+    <img src="/uploads/{{ employee.foto_path }}" alt="Foto empleado" />
+    <span>Foto actual registrada</span>
+  </div>
+  {% endif %}
+
+  <div class="full actions">
+    <button class="btn primary" type="submit">Guardar expediente</button>
+    <a class="btn secondary" href="/personal">Cancelar</a>
+  </div>
+</form>
+{% endblock %}
