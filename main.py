@@ -182,6 +182,19 @@ def init_db() -> None:
             FOREIGN KEY(username) REFERENCES users(username)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS correction_batches (
+            batch_id TEXT PRIMARY KEY,
+            user_name TEXT NOT NULL,
+            status TEXT DEFAULT 'preview',
+            file_path TEXT DEFAULT '',
+            total_rows INTEGER DEFAULT 0,
+            total_changes INTEGER DEFAULT 0,
+            total_errors INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            applied_at TEXT DEFAULT ''
+        )
+        """,
         f"""
         CREATE TABLE IF NOT EXISTS audit_log (
             id {audit_id},
