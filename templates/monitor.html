@@ -3,9 +3,10 @@
 <section class="page-head row-head">
   <div>
     <h2>Monitoreo</h2>
-    <p>Vista para escritorio y móvil: quién está dentro, retardos, vehículos e incidencias.</p>
+    <p>Vista para escritorio y móvil: quién está dentro, retardos, extras e incidencias.</p>
   </div>
   <div class="actions">
+    <a class="btn secondary" href="/retardos">Ver retardos</a>
     <a class="btn secondary" href="/exportar">Exportar Excel</a>
   </div>
 </section>
@@ -14,7 +15,7 @@
   <div class="kpi"><small>Empleados activos</small><strong>{{ total_employees }}</strong></div>
   <div class="kpi"><small>Entradas hoy</small><strong>{{ present_today }}</strong></div>
   <div class="kpi"><small>Retardos hoy</small><strong>{{ late_today }}</strong></div>
-  <div class="kpi"><small>Vehículos dentro</small><strong>{{ vehicles_inside }}</strong></div>
+  <div class="kpi"><small>Extras hoy</small><strong>{{ extra_today }}</strong></div>
 </div>
 
 <section class="card">
@@ -33,7 +34,7 @@
           <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
           <td>{{ row.area }}</td>
           <td>{{ row.turno }}</td>
-          <td>{{ row.entry_at[11:16] if row.entry_at else '-' }}</td>
+          <td>{{ short_datetime(row.entry_at) if row.entry_at else '-' }}</td>
           <td>{{ 'Sí' if row.vehicle_entered else 'No' }}</td>
           <td><span class="badge ok">Dentro</span></td>
         </tr>
@@ -50,7 +51,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Incidencia</th><th>Motivo</th></tr>
+        <tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Min retardo</th><th>Min extra</th><th>Motivo</th></tr>
       </thead>
       <tbody>
         {% for row in incidents %}
@@ -59,11 +60,12 @@
           <td>{{ row.shift_date }}</td>
           <td>{{ row.entry_status or '-' }}</td>
           <td>{{ row.exit_status or '-' }}</td>
-          <td>{{ row.incident or '-' }}</td>
-          <td>{{ row.late_reason or row.early_reason or '-' }}</td>
+          <td>{{ row.late_minutes or 0 }}</td>
+          <td>{{ row.extra_minutes or 0 }}</td>
+          <td>{{ row.late_reason or row.early_reason or row.incident or '-' }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6">Sin incidencias todavía. Sospechoso, pero disfrutémoslo.</td></tr>
+        <tr><td colspan="7">Sin incidencias todavía. Sospechoso, pero disfrutémoslo.</td></tr>
         {% endfor %}
       </tbody>
     </table>

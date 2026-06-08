@@ -20,8 +20,12 @@
   </label>
   <label>Turno
     <select name="turno">
-      <option value="Día" {% if employee and employee.turno == 'Día' %}selected{% endif %}>Día</option>
-      <option value="Noche" {% if employee and employee.turno == 'Noche' %}selected{% endif %}>Noche</option>
+      {% for t in turnos or [] %}
+      <option value="{{ t.name }}" {% if employee and employee.turno == t.name %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+      {% if not turnos %}
+      <option value="Día">Día</option><option value="Noche">Noche</option>
+      {% endif %}
     </select>
   </label>
   <label>Estado

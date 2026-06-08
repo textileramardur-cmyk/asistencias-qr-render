@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Turnos y tolerancias</h2>
+    <p>Configuración simple: entrada, salida, tolerancia de retardo, salida temprana y extra después de salida.</p>
+  </div>
+</section>
+
+<section class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Turno</th><th>Entrada</th><th>Salida</th><th>Cruza medianoche</th><th>Tolerancia entrada</th><th>Tolerancia salida</th><th>Extra después de</th><th>Estado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in turnos %}
+        <tr>
+          <td><strong>{{ t.name }}</strong></td>
+          <td>{{ t.entry_time }}</td>
+          <td>{{ t.exit_time }}</td>
+          <td>{{ 'Sí' if t.crosses_midnight else 'No' }}</td>
+          <td>{{ t.entry_tolerance_minutes }} min</td>
+          <td>{{ t.exit_tolerance_minutes }} min</td>
+          <td>{{ t.extra_after_minutes }} min</td>
+          <td><span class="badge {{ 'ok' if t.active else 'bad' }}">{{ 'Activo' if t.active else 'Inactivo' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Editar / crear turno</h3>
+  <form method="post" action="/turnos/guardar" class="form-grid">
+    <label>Nombre del turno<input name="name" placeholder="Día" required></label>
+    <label>Hora entrada<input type="time" name="entry_time" required></label>
+    <label>Hora salida<input type="time" name="exit_time" required></label>
+    <label>Cruza medianoche
+      <select name="crosses_midnight"><option value="0">No</option><option value="1">Sí</option></select>
+    </label>
+    <label>Tolerancia retardo (min)<input type="number" name="entry_tolerance_minutes" value="10" min="0" max="240"></label>
+    <label>Tolerancia salida temprana (min)<input type="number" name="exit_tolerance_minutes" value="10" min="0" max="240"></label>
+    <label>Considerar extra después de salida (min)<input type="number" name="extra_after_minutes" value="30" min="0" max="240"></label>
+    <label>Estado
+      <select name="active"><option value="1">Activo</option><option value="0">Inactivo</option></select>
+    </label>
+    <div class="full"><button class="btn primary" type="submit">Guardar turno</button></div>
+  </form>
+</section>
+{% endblock %}

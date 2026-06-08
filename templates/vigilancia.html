@@ -1,105 +1,124 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-head">
-  <h2>Vigilancia</h2>
-  <p>Mobile First: escanear QR, validar datos del empleado y registrar entrada/salida. En esta versión no se capturan imágenes.</p>
-</section>
+<section class="kigo-shell">
+  <div class="scan-hero">
+    <video id="qrVideo" class="camera-bg" playsinline muted></video>
+    <div id="reader" class="qr-reader-kigo"></div>
+    <div class="camera-dim"></div>
 
-<div class="vigilancia-grid">
-  <section class="card scan-card">
-    <h3>1. Escanear QR</h3>
-    <p class="muted">El QR trae solo el ID del empleado. También puedes escribirlo manualmente, porque los celulares a veces deciden tener carácter.</p>
-
-    <div id="reader" class="qr-reader"></div>
-    <button class="btn secondary" type="button" onclick="toggleScanner()">Activar / detener cámara QR</button>
-
-    <label>ID empleado</label>
-    <input id="employeeId" value="EMP-000123" autocomplete="off" />
-
-    <label>Movimiento</label>
-    <select id="movementType" onchange="syncMovementUI()">
-      <option value="entrada">Entrada</option>
-      <option value="salida">Salida</option>
-    </select>
-
-    <label>Guardia</label>
-    <input id="guardName" value="Vigilancia" />
-
-    <button class="btn primary" type="button" onclick="loadEmployee()">Buscar empleado</button>
-  </section>
-
-  <section id="employeeCard" class="card employee-card hidden">
-    <div class="employee-header">
-      <div id="employeePhoto" class="employee-photo">👤</div>
-      <div>
-        <h3 id="empName">Empleado</h3>
-        <p id="empMeta" class="muted">Área · Puesto</p>
-        <span id="empStatus" class="badge ok">Activo</span>
+    <div class="scan-top">
+      <div class="scan-logo">▣ asistencias</div>
+      <div class="scan-actions">
+        <button class="icon-btn" type="button" onclick="toggleScanner()" title="Activar cámara">▣</button>
+        <button class="icon-btn" type="button" onclick="toggleManualPanel()" title="ID manual">⌕</button>
       </div>
     </div>
 
-    <div class="data-grid">
-      <div><small>ID</small><strong id="empId">-</strong></div>
-      <div><small>Turno</small><strong id="empTurno">-</strong></div>
-      <div><small>Vehículo configurado</small><strong id="empVehicle">-</strong></div>
-      <div><small>Registro abierto</small><strong id="empOpen">-</strong></div>
+    <div class="scan-title">Escanear QR</div>
+    <div class="scan-frame"><span></span><span></span><span></span><span></span></div>
+    <div id="scannerStatus" class="scanner-status">Cámara lista. También puedes capturar ID manual.</div>
+
+    <div class="quick-actions">
+      <button class="quick-card active" type="button" onclick="setMovement('entrada')">
+        <small>Registrar</small><strong>Entrada</strong>
+      </button>
+      <button class="quick-card" type="button" onclick="setMovement('salida')">
+        <small>Registrar</small><strong>Salida</strong>
+      </button>
+    </div>
+  </div>
+
+  <aside class="bottom-panel">
+    <div class="manual-panel" id="manualPanel">
+      <div class="mini-grid">
+        <label>ID empleado
+          <input id="employeeId" value="EMP-000123" autocomplete="off" />
+        </label>
+        <label>Guardia
+          <input id="guardName" value="Vigilancia" />
+        </label>
+      </div>
+      <input type="hidden" id="movementType" value="entrada" />
+      <button class="btn primary full-btn" type="button" onclick="loadEmployee()">Buscar / validar empleado</button>
     </div>
 
-    <div class="alert info">
-      En esta versión no se capturan imágenes. La evidencia visual del vehículo se mantiene por la bitácora externa de WhatsApp.
-    </div>
+    <section id="employeeCard" class="employee-card-pro hidden">
+      <div class="employee-card-head">
+        <div class="avatar-clean">👤</div>
+        <div>
+          <h2 id="empName">Empleado</h2>
+          <p id="empMeta">Área · Puesto</p>
+          <div class="chip-row">
+            <span id="empStatus" class="badge ok">Activo</span>
+            <span id="movementChip" class="badge neutral">Entrada</span>
+          </div>
+        </div>
+      </div>
 
-    <form id="attendanceForm" class="form-stack">
-      <input type="hidden" id="formEmployeeId" name="employee_id" />
-      <input type="hidden" id="formMovement" name="movimiento" value="entrada" />
+      <div class="status-box" id="statusBox">
+        <small>Evaluación automática</small>
+        <strong id="evalStatus">-</strong>
+        <p id="evalDetail">Turno y tolerancia configurables.</p>
+      </div>
 
-      <input type="hidden" id="formGuardia" name="guardia" />
+      <div class="data-strip">
+        <div><small>ID</small><strong id="empId">-</strong></div>
+        <div><small>Turno</small><strong id="empTurno">-</strong></div>
+        <div><small>Vehículo</small><strong id="empVehicle">-</strong></div>
+        <div><small>Abierto</small><strong id="empOpen">-</strong></div>
+      </div>
 
-      <label class="check-row">
-        <input type="checkbox" id="vehicleCheck" name="vehiculo" value="1" onchange="syncVehicleUI()" />
-        Entró/sale con vehículo
-      </label>
+      <form id="attendanceForm" class="form-stack pro-form">
+        <input type="hidden" id="formEmployeeId" name="employee_id" />
+        <input type="hidden" id="formMovement" name="movimiento" value="entrada" />
+        <input type="hidden" id="formGuardia" name="guardia" />
 
-      <section id="vehiclePhotos" class="vehicle-panel hidden">
-        <h3>Vehículo registrado</h3>
-        <p class="muted">No se capturan fotos ni placas en esta versión. La evidencia del vehículo se lleva por WhatsApp.</p>
-      </section>
+        <label class="check-row compact">
+          <input type="checkbox" id="vehicleCheck" name="vehiculo" value="1" />
+          Con vehículo hoy
+        </label>
 
-      <section id="latePanel" class="incident-panel">
-        <label>Motivo de retardo, si aplica</label>
-        <select name="motivo_retardo">
-          <option value="">Sin retardo / No aplica</option>
-          <option>Tráfico</option>
-          <option>Transporte</option>
-          <option>Clima</option>
-          <option>Cita médica</option>
-          <option>Permiso autorizado</option>
-          <option>Otro</option>
-        </select>
-      </section>
+        <section id="latePanel" class="incident-panel hidden">
+          <label>Motivo de retardo <span class="required">obligatorio</span></label>
+          <select name="motivo_retardo" id="lateReason">
+            <option value="">Seleccionar motivo</option>
+            <option>Tráfico</option>
+            <option>Transporte</option>
+            <option>Clima</option>
+            <option>Cita médica</option>
+            <option>Permiso autorizado</option>
+            <option>Otro</option>
+          </select>
+        </section>
 
-      <section id="earlyPanel" class="incident-panel hidden">
-        <label>Motivo de salida temprana, si aplica</label>
-        <select name="motivo_salida_temprana">
-          <option value="">Salida normal / No aplica</option>
-          <option>Permiso autorizado</option>
-          <option>Cita médica</option>
-          <option>Enfermedad</option>
-          <option>Emergencia familiar</option>
-          <option>Comisión externa</option>
-          <option>Otro</option>
-        </select>
-      </section>
+        <section id="earlyPanel" class="incident-panel hidden">
+          <label>Motivo de salida temprana <span class="required">obligatorio</span></label>
+          <select name="motivo_salida_temprana" id="earlyReason">
+            <option value="">Seleccionar motivo</option>
+            <option>Permiso autorizado</option>
+            <option>Cita médica</option>
+            <option>Enfermedad</option>
+            <option>Emergencia familiar</option>
+            <option>Comisión externa</option>
+            <option>Otro</option>
+          </select>
+        </section>
 
-      <label>Observaciones</label>
-      <textarea name="observaciones" rows="3" placeholder="Opcional"></textarea>
+        <label>Observaciones
+          <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
+        </label>
 
-      <div id="resultBox" class="result hidden"></div>
+        <div id="resultBox" class="result hidden"></div>
+        <button id="submitBtn" class="btn primary full-btn sticky-action" type="submit">Registrar entrada</button>
+      </form>
+    </section>
 
-      <button class="btn primary sticky-action" type="submit">Registrar movimiento</button>
-    </form>
-  </section>
-</div>
+    <section class="last-moves">
+      <div class="section-row"><h3>Accesos rápidos</h3><a href="/retardos" class="btn small secondary">Retardos</a></div>
+      <p class="muted tiny">La evidencia de vehículo sigue por WhatsApp. Aquí solo se registra asistencia, turno, retardo, salida temprana y extra.</p>
+    </section>
+  </aside>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -108,7 +127,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('attendanceForm');
     form.addEventListener('submit', submitAttendance);
-    syncMovementUI();
+    setMovement('entrada');
   });
 </script>
 {% endblock %}
