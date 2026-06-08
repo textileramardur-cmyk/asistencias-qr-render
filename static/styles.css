@@ -253,7 +253,7 @@ th { color: var(--azul); background: #f8fafc; }
   min-height: 62vh;
   border-radius: 28px;
   overflow: hidden;
-  background: linear-gradient(160deg, #17263f, #0b1320);
+  background: linear-gradient(160deg, var(--azul2), var(--azul));
   box-shadow: var(--shadow);
   color: white;
 }
@@ -359,7 +359,8 @@ th { color: var(--azul); background: #f8fafc; }
   text-align: center;
   box-shadow: 0 8px 20px rgba(0,0,0,.22);
 }
-.quick-card.active { background: #ff5a00; color: white; }
+.quick-card.active { background: var(--azul); color: white; }
+.quick-card.active.salida { background: var(--azul2); color: white; }
 .quick-card small { display: block; color: inherit; opacity: .9; font-weight: 700; }
 .quick-card strong { display: block; font-size: 20px; margin-top: 4px; }
 .bottom-panel { display: grid; gap: 12px; }
@@ -419,3 +420,15 @@ th { color: var(--azul); background: #f8fafc; }
   .scan-hero { border-radius: 0 0 28px 28px; min-height: 66vh; margin: -8px -8px 0; }
   .topbar { display: none; }
 }
+
+.config-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.config-card h3 { margin-top: 0; color: var(--azul); }
+.clean-list { margin: 8px 0 14px; padding-left: 18px; color: var(--texto); }
+.clean-list li { margin: 8px 0; }
+.compact-table table { min-width: 520px; }
+@media (min-width: 980px) { .config-grid { grid-template-columns: repeat(2, 1fr); } }
+.inline-form { display: grid; gap: 6px; min-width: 220px; }
+.inline-form input { margin-top: 0; padding: 9px; font-size: 13px; }
+.alert-card.bad { border: 1px solid #ffc3c3; background: #fff2f2; }
+.actions select { min-width: 160px; }
+.nav-user { color: #eaf2ff; font-weight: 800; padding: 8px 10px; }

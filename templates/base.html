@@ -7,27 +7,35 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  {% set user = get_current_user(request) %}
   <header class="topbar">
     <div>
       <h1>Control QR Asistencias</h1>
       <p>Entradas, salidas, retardos, extras y QRs</p>
     </div>
     <nav class="nav">
-      <a href="/vigilancia">Vigilancia</a>
-      <a href="/monitor">Monitor</a>
-      <a href="/retardos">Retardos</a>
-      <a href="/turnos">Turnos</a>
-      <a href="/personal">Personal</a>
-      <a href="/importar">Importar</a>
-      <a href="/qr">QR</a>
-      <a href="/exportar">Exportar</a>
-      <a href="/correcciones">Correcciones</a>
-      {% set user = get_current_user(request) %}
+      {% if user and user.role == 'Vigilancia' %}
+        <a href="/vigilancia">Vigilancia</a>
+      {% else %}
+        <a href="/vigilancia">Vigilancia</a>
+        <a href="/monitor">Monitor</a>
+        <a href="/retardos">Retardos</a>
+        <a href="/reportes/semanal">Semanal</a>
+        <a href="/configuracion">Configuración</a>
+        <a href="/turnos">Turnos</a>
+        <a href="/personal">Personal</a>
+        <a href="/usuarios">Usuarios</a>
+        <a href="/importar">Importar</a>
+        <a href="/qr">QR</a>
+        <a href="/exportar">Exportar</a>
+        <a href="/correcciones">Correcciones</a>
+        <a href="/sistema">Sistema</a>
+      {% endif %}
       {% if user %}
-        <span class="nav-user">{{ user.username }}</span>
+        <span class="nav-user">{{ user.username }} · {{ user.role }}</span>
         <a href="/logout">Salir</a>
       {% else %}
-        <a href="/login">Admin</a>
+        <a href="/login">Entrar</a>
       {% endif %}
     </nav>
   </header>

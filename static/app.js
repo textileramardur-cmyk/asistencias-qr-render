@@ -15,21 +15,24 @@ function fmtDateTime(value) {
   return `${pad(d.getDate())}/${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function setMovement(movement) {
+function setMovement(movement, reload = false) {
   currentMovement = movement;
   const input = byId('movementType');
   if (input) input.value = movement;
   const fm = byId('formMovement');
   if (fm) fm.value = movement;
-  document.querySelectorAll('.quick-card').forEach(btn => btn.classList.remove('active'));
-  const buttons = document.querySelectorAll('.quick-card');
-  if (movement === 'entrada' && buttons[0]) buttons[0].classList.add('active');
-  if (movement === 'salida' && buttons[1]) buttons[1].classList.add('active');
+  const autoText = byId('autoMovementText');
+  if (autoText) autoText.innerText = movement === 'entrada' ? 'Entrada' : 'Salida';
+  const autoCard = byId('autoMovementCard');
+  if (autoCard) {
+    autoCard.classList.remove('salida');
+    if (movement === 'salida') autoCard.classList.add('salida');
+  }
   const chip = byId('movementChip');
   if (chip) chip.innerText = movement === 'entrada' ? 'Entrada' : 'Salida';
   const submit = byId('submitBtn');
   if (submit) submit.innerText = movement === 'entrada' ? 'Registrar entrada' : 'Registrar salida';
-  if (currentEmployee) loadEmployee();
+  if (reload && currentEmployee) loadEmployee();
 }
 
 function toggleManualPanel() {
@@ -71,14 +74,22 @@ function paintEvaluation(preview) {
   syncPanelsByPreview();
 }
 
+async function parseJsonResponse(res) {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return { ok: false, message: res.status === 401 ? 'Sesión vencida. Inicia sesión nuevamente.' : 'Respuesta inesperada del servidor.' };
+  }
+  return await res.json();
+}
+
 async function loadEmployee() {
   const employeeId = byId('employeeId').value.trim();
   const resultBox = byId('resultBox');
   if (resultBox) hide(resultBox);
   if (!employeeId) return;
 
-  const res = await fetch(`/api/empleado/${encodeURIComponent(employeeId)}?movimiento=${encodeURIComponent(currentMovement)}`);
-  const data = await res.json();
+  const res = await fetch(`/api/empleado/${encodeURIComponent(employeeId)}`);
+  const data = await parseJsonResponse(res);
   if (!data.ok) {
     alert(data.message || 'Empleado no encontrado');
     return;
@@ -86,6 +97,7 @@ async function loadEmployee() {
 
   currentEmployee = data.employee;
   currentPreview = data.preview;
+  setMovement(data.next_movement || currentPreview?.movement || 'entrada', false);
 
   show(byId('employeeCard'));
   byId('empName').innerText = currentEmployee.nombre;
@@ -104,10 +116,8 @@ async function loadEmployee() {
   const vehicleCheck = byId('vehicleCheck');
   if (vehicleCheck) vehicleCheck.checked = Boolean(currentEmployee.tiene_vehiculo);
 
-  // Si el empleado tiene entrada abierta, sugerimos salida; si no, entrada. Menos clics, menos oportunidad para el caos.
-  if (data.has_open_attendance && currentMovement !== 'salida') setMovement('salida');
-  else if (!data.has_open_attendance && currentMovement !== 'entrada') setMovement('entrada');
-  else paintEvaluation(currentPreview);
+  // El movimiento lo decide el sistema: entrada si no hay registro abierto; salida si ya hay entrada abierta.
+  paintEvaluation(currentPreview);
 
   byId('employeeCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -134,7 +144,7 @@ async function submitAttendance(event) {
   if (!byId('vehicleCheck')?.checked) formData.set('vehiculo', '0');
 
   const res = await fetch('/api/registro', { method: 'POST', body: formData });
-  const data = await res.json();
+  const data = await parseJsonResponse(res);
 
   resultBox.className = 'result ' + (data.ok ? 'ok' : 'error');
   resultBox.innerText = data.message || (data.ok ? 'Registro guardado' : 'No se pudo registrar');
@@ -146,7 +156,7 @@ async function submitAttendance(event) {
     currentEmployee = null;
     currentPreview = null;
     hide(byId('employeeCard'));
-    setMovement('entrada');
+    setMovement('entrada', false);
     byId('scannerStatus').innerText = data.message;
   }
 }

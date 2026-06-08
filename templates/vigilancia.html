@@ -16,14 +16,14 @@
 
     <div class="scan-title">Escanear QR</div>
     <div class="scan-frame"><span></span><span></span><span></span><span></span></div>
-    <div id="scannerStatus" class="scanner-status">Cámara lista. También puedes capturar ID manual.</div>
+    <div id="scannerStatus" class="scanner-status">Usuario: {{ active_user.username if active_user else 'Vigilancia' }} · Cámara lista. También puedes capturar ID manual.</div>
 
-    <div class="quick-actions">
-      <button class="quick-card active" type="button" onclick="setMovement('entrada')">
-        <small>Registrar</small><strong>Entrada</strong>
-      </button>
-      <button class="quick-card" type="button" onclick="setMovement('salida')">
-        <small>Registrar</small><strong>Salida</strong>
+    <div class="quick-actions auto-mode">
+      <div class="quick-card active" id="autoMovementCard">
+        <small>Siguiente movimiento</small><strong id="autoMovementText">Automático</strong>
+      </div>
+      <button class="quick-card" type="button" onclick="toggleManualPanel()">
+        <small>Captura</small><strong>ID manual</strong>
       </button>
     </div>
   </div>
@@ -32,7 +32,7 @@
     <div class="manual-panel" id="manualPanel">
       <div class="mini-grid">
         <label>ID empleado
-          <input id="employeeId" value="EMP-000123" autocomplete="off" />
+          <input id="employeeId" value="" placeholder="Escanea o escribe el ID" autocomplete="off" />
         </label>
         <label>Guardia
           <input id="guardName" value="Vigilancia" />
@@ -114,7 +114,7 @@
     </section>
 
     <section class="last-moves">
-      <div class="section-row"><h3>Accesos rápidos</h3><a href="/retardos" class="btn small secondary">Retardos</a></div>
+      <div class="section-row"><h3>Accesos rápidos</h3>{% if active_user and active_user.role == 'Admin' %}<a href="/retardos" class="btn small secondary">Retardos</a>{% endif %}</div>
       <p class="muted tiny">La evidencia de vehículo sigue por WhatsApp. Aquí solo se registra asistencia, turno, retardo, salida temprana y extra.</p>
     </section>
   </aside>
@@ -127,7 +127,7 @@
   window.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('attendanceForm');
     form.addEventListener('submit', submitAttendance);
-    setMovement('entrada');
+    setMovement('entrada', false);
   });
 </script>
 {% endblock %}

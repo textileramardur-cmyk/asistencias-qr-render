@@ -3,7 +3,7 @@
 <section class="page-head row-head">
   <div>
     <h2>Retardos, salidas tempranas y extras</h2>
-    <p>Vista rápida por fecha. Simple, útil y sin convertirse en tablero de nave espacial.</p>
+    <p>El sistema calcula. Tú revisas excepciones. Menos clics, menos teatro administrativo.</p>
   </div>
   <form class="actions" method="get" action="/retardos">
     <input type="date" name="fecha" value="{{ fecha }}">
@@ -13,7 +13,7 @@
 
 <div class="kpi-grid">
   <div class="kpi"><small>Retardos</small><strong>{{ kpis.retardos }}</strong><small>{{ kpis.min_retardo }} min acumulados</small></div>
-  <div class="kpi"><small>Sin motivo</small><strong>{{ kpis.sin_motivo }}</strong><small>deben corregirse</small></div>
+  <div class="kpi"><small>Incompletos</small><strong>{{ kpis.sin_motivo }}</strong><small>Sin motivo capturado</small></div>
   <div class="kpi"><small>Salidas tempranas</small><strong>{{ kpis.salidas_tempranas }}</strong><small>{{ kpis.min_temprano }} min</small></div>
   <div class="kpi"><small>Extras</small><strong>{{ kpis.extras }}</strong><small>{{ kpis.min_extra }} min</small></div>
 </div>
@@ -22,14 +22,27 @@
   <div class="section-row"><h3>Retardos del {{ fecha }}</h3><a class="btn small secondary" href="/exportar/asistencias.xlsx?fecha_inicio={{ fecha }}&fecha_fin={{ fecha }}">Exportar día</a></div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Límite</th><th>Min tarde</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Límite</th><th>Min tarde</th><th>Motivo</th><th>Estado</th></tr></thead>
       <tbody>
       {% for r in late_rows %}
-        <tr><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.area }}</td><td>{{ r.turno }}</td><td>{{ short_datetime(r.entry_at) }}</td><td>{{ short_datetime(r.entry_limit_at) }}</td><td>{{ r.late_minutes or 0 }}</td><td>{{ r.late_reason or 'SIN MOTIVO' }}</td></tr>
-      {% else %}<tr><td colspan="7">Sin retardos en esta fecha.</td></tr>{% endfor %}
+        <tr>
+          <td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td>
+          <td>{{ r.area }}</td>
+          <td>{{ r.turno }}</td>
+          <td>{{ short_datetime(r.entry_at) }}</td>
+          <td>{{ short_datetime(r.entry_limit_at) }}</td>
+          <td>{{ r.late_minutes or 0 }}</td>
+          <td>{{ r.late_reason or 'SIN MOTIVO' }}</td>
+          <td>
+            {% if r.late_reason %}<span class="badge ok">Completo</span>{% else %}<span class="badge bad">Incompleto</span>{% endif %}
+            {% if r.review_required %}<br><span class="badge warn">Revisión</span>{% endif %}
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="8">Sin retardos en esta fecha.</td></tr>{% endfor %}
       </tbody>
     </table>
   </div>
+  <p class="muted tiny">Si un retardo fue error de horario o turno, se corrige en <a href="/correcciones">Correcciones</a>. No se borra como si el pasado tuviera botón de deshacer.</p>
 </section>
 
 <section class="card">

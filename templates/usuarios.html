@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Usuarios y roles</h2>
+    <p>Admin configura. Vigilancia escanea. Todo mundo feliz, o al menos menos confundido.</p>
+  </div>
+  <a class="btn secondary" href="/configuracion">Configuración</a>
+</section>
+
+<section class="card">
+  <h3>Usuarios existentes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Usuario</th><th>Nombre visible</th><th>Rol</th><th>Estado</th><th>Actualizado</th></tr></thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td><strong>{{ u.username }}</strong></td>
+          <td>{{ u.display_name or '' }}</td>
+          <td><span class="badge neutral">{{ u.role }}</span></td>
+          <td><span class="badge {{ 'ok' if u.active else 'bad' }}">{{ 'Activo' if u.active else 'Inactivo' }}</span></td>
+          <td>{{ short_datetime(u.updated_at) }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5">Sin usuarios.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Crear / editar usuario</h3>
+  <form method="post" action="/usuarios/guardar" class="form-grid">
+    <label>Usuario<input name="username" placeholder="VIGILANCIA1" required></label>
+    <label>Nombre visible<input name="display_name" placeholder="Caseta turno día"></label>
+    <label>Rol
+      <select name="role"><option value="Vigilancia">Vigilancia</option><option value="Admin">Admin</option></select>
+    </label>
+    <label>Estado
+      <select name="active"><option value="1">Activo</option><option value="0">Inactivo</option></select>
+    </label>
+    <label class="full">Clave <small>Si editas y la dejas vacía, no cambia.</small><input name="password" type="password" autocomplete="new-password"></label>
+    <div class="full"><button class="btn primary" type="submit">Guardar usuario</button></div>
+  </form>
+</section>
+{% endblock %}

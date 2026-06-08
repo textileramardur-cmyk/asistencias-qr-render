@@ -2,9 +2,10 @@
 {% block content %}
 <section class="page-head row-head">
   <div>
-    <h2>Turnos y tolerancias</h2>
-    <p>Configuración simple: entrada, salida, tolerancia de retardo, salida temprana y extra después de salida.</p>
+    <h2>Turnos y reglas automáticas</h2>
+    <p>Configura horarios, tolerancias, extra y cierre provisional. Pocas reglas, bien puestas. La civilización agradece.</p>
   </div>
+  <a class="btn secondary" href="/configuracion">Configuración</a>
 </section>
 
 <section class="card">
@@ -12,7 +13,7 @@
     <table>
       <thead>
         <tr>
-          <th>Turno</th><th>Entrada</th><th>Salida</th><th>Cruza medianoche</th><th>Tolerancia entrada</th><th>Tolerancia salida</th><th>Extra después de</th><th>Estado</th>
+          <th>Turno</th><th>Entrada</th><th>Salida</th><th>Cruza medianoche</th><th>Retardo después</th><th>Salida temprana</th><th>Extra después</th><th>Cierre provisional</th><th>Estado</th>
         </tr>
       </thead>
       <tbody>
@@ -25,6 +26,13 @@
           <td>{{ t.entry_tolerance_minutes }} min</td>
           <td>{{ t.exit_tolerance_minutes }} min</td>
           <td>{{ t.extra_after_minutes }} min</td>
+          <td>
+            {% if t.auto_close_enabled %}
+              {{ t.provisional_close_time }} · máx {{ t.max_open_minutes }} min
+            {% else %}
+              Inactivo
+            {% endif %}
+          </td>
           <td><span class="badge {{ 'ok' if t.active else 'bad' }}">{{ 'Activo' if t.active else 'Inactivo' }}</span></td>
         </tr>
         {% endfor %}
@@ -45,10 +53,16 @@
     <label>Tolerancia retardo (min)<input type="number" name="entry_tolerance_minutes" value="10" min="0" max="240"></label>
     <label>Tolerancia salida temprana (min)<input type="number" name="exit_tolerance_minutes" value="10" min="0" max="240"></label>
     <label>Considerar extra después de salida (min)<input type="number" name="extra_after_minutes" value="30" min="0" max="240"></label>
+    <label>Cierre provisional automático
+      <select name="auto_close_enabled"><option value="1">Activo</option><option value="0">Inactivo</option></select>
+    </label>
+    <label>Hora límite cierre provisional<input type="time" name="provisional_close_time" value="02:00"></label>
+    <label>Máximo registro abierto (min)<input type="number" name="max_open_minutes" value="1080" min="0" max="2880"></label>
     <label>Estado
       <select name="active"><option value="1">Activo</option><option value="0">Inactivo</option></select>
     </label>
     <div class="full"><button class="btn primary" type="submit">Guardar turno</button></div>
   </form>
+  <p class="muted tiny">Ejemplo día: entrada 08:00, salida 19:00, cierre provisional 02:00. Si no hubo salida, se cierra a las 19:00 y queda pendiente de revisión.</p>
 </section>
 {% endblock %}

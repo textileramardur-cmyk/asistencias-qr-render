@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Configuración</h2>
+    <p>Centro de mando sin exceso de botones, porque una configuración también puede tener dignidad.</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="/turnos">Turnos</a>
+    <a class="btn secondary" href="/usuarios">Usuarios</a>
+    <a class="btn secondary" href="/sistema">Sistema</a>
+  </div>
+</section>
+
+<div class="kpi-grid compact">
+  <div class="kpi"><small>Empleados activos</small><strong>{{ empleados_activos }}</strong></div>
+  <div class="kpi"><small>Registros abiertos</small><strong>{{ registros_abiertos }}</strong></div>
+  <div class="kpi"><small>Retardos hoy</small><strong>{{ retardos_hoy }}</strong></div>
+</div>
+
+<section class="config-grid">
+  <article class="card config-card">
+    <h3>Turnos y reglas</h3>
+    <p>Entrada, salida, tolerancia, extra y cierre provisional automático.</p>
+    <div class="table-wrap compact-table">
+      <table>
+        <thead><tr><th>Turno</th><th>Entrada</th><th>Salida</th><th>Retardo</th><th>Extra</th><th>Cierre</th></tr></thead>
+        <tbody>
+        {% for t in turnos %}
+          <tr><td><strong>{{ t.name }}</strong></td><td>{{ t.entry_time }}</td><td>{{ t.exit_time }}</td><td>{{ t.entry_tolerance_minutes }} min</td><td>{{ t.extra_after_minutes }} min</td><td>{{ t.provisional_close_time }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <a class="btn primary" href="/turnos">Configurar turnos</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Usuarios y roles</h3>
+    <p>Admin ve todo. Vigilancia solo escanea y registra. Así nadie convierte el sistema en buffet de permisos.</p>
+    <ul class="clean-list"><li><strong>Admin:</strong> configuración, reportes, correcciones.</li><li><strong>Vigilancia:</strong> solo pantalla QR.</li></ul>
+    <a class="btn secondary" href="/usuarios">Administrar usuarios</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Cierre provisional</h3>
+    <p>Si un registro queda abierto demasiado tiempo, el sistema lo cierra con la salida programada y lo marca para revisión.</p>
+    <ul class="clean-list"><li>Evita que una entrada del día siguiente se interprete como salida anterior.</li><li>Conserva auditoría y queda pendiente para Admin/RH.</li></ul>
+    <a class="btn secondary" href="/monitor">Ver abiertos</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Reportes</h3>
+    <p>Vista semanal acumulada de retardos, faltas operativas, extras y pendientes de revisión.</p>
+    <a class="btn secondary" href="/reportes/semanal">Reporte semanal</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Estado del sistema</h3>
+    <p>Conexión a base, últimos errores, eventos técnicos y registros pendientes.</p>
+    <a class="btn secondary" href="/sistema">Ver salud del sistema</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Captura QR</h3>
+    <p>Vigilancia escanea. El sistema decide entrada/salida. Admin corrige. Simple, por una vez.</p>
+    <a class="btn secondary" href="/vigilancia">Abrir vigilancia</a>
+  </article>
+</section>
+{% endblock %}

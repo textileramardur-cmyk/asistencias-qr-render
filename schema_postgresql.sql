@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS shift_settings (
   entry_tolerance_minutes INTEGER DEFAULT 10,
   exit_tolerance_minutes INTEGER DEFAULT 10,
   extra_after_minutes INTEGER DEFAULT 30,
+  auto_close_enabled INTEGER DEFAULT 1,
+  provisional_close_time TEXT DEFAULT '02:00',
+  max_open_minutes INTEGER DEFAULT 1080,
   active INTEGER DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -57,6 +60,14 @@ CREATE TABLE IF NOT EXISTS attendance (
   late_minutes INTEGER DEFAULT 0,
   early_minutes INTEGER DEFAULT 0,
   extra_minutes INTEGER DEFAULT 0,
+  late_justified INTEGER DEFAULT 0,
+  early_justified INTEGER DEFAULT 0,
+  extra_authorized INTEGER DEFAULT 0,
+  provisional_exit INTEGER DEFAULT 0,
+  review_required INTEGER DEFAULT 0,
+  review_status TEXT DEFAULT '',
+  auto_closed_at TEXT DEFAULT '',
+  anulled INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -66,6 +77,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT DEFAULT 'Admin',
   active INTEGER DEFAULT 1,
+  display_name TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -99,5 +111,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
   old_value TEXT DEFAULT '',
   new_value TEXT DEFAULT '',
   reason TEXT DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_events (
+  id SERIAL PRIMARY KEY,
+  level TEXT DEFAULT 'info',
+  module TEXT DEFAULT '',
+  event_type TEXT DEFAULT '',
+  user_name TEXT DEFAULT '',
+  message TEXT DEFAULT '',
+  detail TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
