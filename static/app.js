@@ -54,10 +54,10 @@ async function loadEmployee() {
   status.className = 'badge ' + (currentEmployee.estado === 'Activo' ? 'ok' : 'bad');
 
   const photo = byId('employeePhoto');
-  photo.innerHTML = data.foto_url ? `<img src="${data.foto_url}" alt="Foto empleado">` : '👤';
+  if (photo) photo.innerHTML = '👤';
 
   const vehicleCheck = byId('vehicleCheck');
-  vehicleCheck.checked = Boolean(currentEmployee.tiene_vehiculo || currentEmployee.requiere_fotos_vehiculo);
+  vehicleCheck.checked = Boolean(currentEmployee.tiene_vehiculo);
   syncVehicleUI();
   syncMovementUI();
 }

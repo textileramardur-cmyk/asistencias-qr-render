@@ -12,17 +12,13 @@ services:
           name: asistencias-qr-db
           property: connectionString
       - key: DATA_DIR
-        value: /var/data
+        value: /tmp/asistencias_data
       - key: DEFAULT_ADMIN_USERNAME
         value: Admin4rd
       - key: DEFAULT_ADMIN_PASSWORD
         value: Adm4rd
       - key: SESSION_DAYS
         value: "14"
-    disk:
-      name: asistencias-uploads
-      mountPath: /var/data
-      sizeGB: 1
 
 databases:
   - name: asistencias-qr-db

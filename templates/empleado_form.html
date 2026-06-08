@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-head">
   <h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
-  <p>La foto se usa solo para que vigilancia valide visualmente. No se fotografía al personal en entrada/salida.</p>
+  <p>En esta versión no se cargan fotos. El expediente queda enfocado en ID, turno, estado y configuración de vehículo.</p>
 </section>
 
 <form class="card form-grid" action="{{ '/personal/' ~ employee.id ~ '/guardar' if employee else '/personal/guardar' }}" method="post" enctype="multipart/form-data">
@@ -37,31 +37,16 @@
       <option value="1" {% if employee and employee.tiene_vehiculo %}selected{% endif %}>Sí</option>
     </select>
   </label>
-  <label>Requiere fotos de vehículo
-    <select name="requiere_fotos_vehiculo">
-      <option value="0" {% if not employee or not employee.requiere_fotos_vehiculo %}selected{% endif %}>No</option>
-      <option value="1" {% if employee and employee.requiere_fotos_vehiculo %}selected{% endif %}>Sí</option>
-    </select>
-  </label>
   <label>QR activo
     <select name="qr_activo">
       <option value="1" {% if not employee or employee.qr_activo %}selected{% endif %}>Sí</option>
       <option value="0" {% if employee and not employee.qr_activo %}selected{% endif %}>No</option>
     </select>
   </label>
-  <label>Foto registrada del empleado
-    <input type="file" name="foto" accept="image/*" />
-  </label>
   <label class="full">Observaciones
     <textarea name="observaciones" rows="4">{{ employee.observaciones if employee else '' }}</textarea>
   </label>
 
-  {% if employee and employee.foto_path %}
-  <div class="full employee-preview">
-    <img src="/uploads/{{ employee.foto_path }}" alt="Foto empleado" />
-    <span>Foto actual registrada</span>
-  </div>
-  {% endif %}
 
   <div class="full actions">
     <button class="btn primary" type="submit">Guardar expediente</button>

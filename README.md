@@ -1,6 +1,8 @@
-# Control QR Asistencias - Render + PostgreSQL
+# Control QR Asistencias - Render Free + PostgreSQL
 
 Webapp en FastAPI para control de entradas/salidas por QR, pensada para vigilancia en móvil y monitoreo en escritorio/móvil.
+
+Esta versión está ajustada para **Render Free**: no usa disco persistente y **no captura ni almacena imágenes**. La evidencia visual del vehículo queda fuera del sistema, por ejemplo en la bitácora de WhatsApp.
 
 ## Base de datos
 
@@ -14,27 +16,30 @@ Las tablas se crean automáticamente al iniciar la app:
 - `employees`
 - `attendance`
 - `audit_log`
+- `users`
+- `user_sessions`
+- `correction_batches`
 
 ## Funciones incluidas
 
 - Registro de empleados.
 - Importación masiva desde Excel.
 - Edición posterior de expedientes.
-- Foto registrada del empleado para validación visual por vigilancia.
 - QR por ID de empleado.
-- Imagen tipo credencial para que el empleado la muestre desde su celular.
+- Imagen tipo credencial QR para que el empleado la muestre desde su celular.
 - Impresión masiva de QRs desde navegador.
 - Vista mobile first para vigilancia.
 - Vista de monitoreo para escritorio y móvil.
 - Registro de entrada y salida.
 - Turno Día y Noche.
 - Turno noche cruza medianoche.
-- Captura de fotos del vehículo cuando aplica:
-  - Foto frontal del vehículo.
-  - Foto de cajuela.
-- No captura placa como dato.
-- No toma foto del personal al entrar o salir.
+- Registro de si el empleado entra/sale con vehículo.
+- No captura placas.
+- No captura fotos del personal.
+- No captura fotos del vehículo en esta versión.
 - Auditoría básica de altas, ediciones y registros.
+- Login Admin.
+- Correcciones masivas desde Excel con comparación inteligente.
 - Exportación a Excel cuando se necesite:
   - empleados
   - asistencias
@@ -48,6 +53,7 @@ Las tablas se crean automáticamente al iniciar la app:
 main.py
 requirements.txt
 render.yaml
+schema_postgresql.sql
 templates/
 static/
 ```
@@ -74,25 +80,30 @@ data/asistencias.db
 ## Rutas principales
 
 ```txt
-/vigilancia   Pantalla mobile first para entradas y salidas
-/monitor      Monitoreo operativo
-/personal     Lista y edición de empleados
-/importar     Importación masiva desde Excel
-/qr           Módulo de QR e impresión
-/exportar     Exportación a Excel con filtros
-/healthz      Revisión rápida de app y tipo de base de datos
+/login         Acceso Admin
+/logout        Cerrar sesión
+/vigilancia    Pantalla mobile first para entradas y salidas
+/monitor       Monitoreo operativo
+/personal      Lista y edición de empleados
+/importar      Importación masiva desde Excel
+/qr            Módulo de QR e impresión
+/exportar      Exportación a Excel con filtros
+/correcciones  Corrección masiva desde Excel
+/healthz       Revisión rápida de app y tipo de base de datos
 ```
 
 ## Deploy en Render
 
 Este proyecto incluye `render.yaml` para crear:
 
-- Web Service de FastAPI.
-- Base de datos Render Postgres.
+- Web Service de FastAPI en plan free.
+- Base de datos Render Postgres en plan free.
 - Variable `DATABASE_URL` conectada a Postgres.
-- Disco persistente para fotos en `/var/data`.
+- `DATA_DIR=/tmp/asistencias_data` solo para archivos temporales.
 
-Render recomienda para FastAPI:
+No usa Persistent Disk, porque Render Free no lo soporta para servicios web. Qué amable detalle de la nube, reservar la persistencia de archivos para cuando pagas.
+
+Render usará:
 
 ```bash
 pip install -r requirements.txt
@@ -106,14 +117,12 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 
 como Start Command.
 
-## Notas sobre persistencia
+## Persistencia
 
 - La **base de datos** queda en PostgreSQL.
-- Las **fotos de empleados y vehículos** se guardan en `/var/data/uploads`.
-- Para que las fotos sobrevivan a redeploys/restarts, el servicio necesita el disco persistente definido en `render.yaml`.
-
-Si Render no permite disco persistente en el plan seleccionado, cambia el plan del servicio web desde el dashboard o guarda las fotos en almacenamiento externo en una versión posterior.
-
+- Los **registros, empleados, auditoría, correcciones y usuarios** quedan en PostgreSQL.
+- Esta versión **no guarda imágenes**.
+- Las imágenes QR se generan al momento desde la base de datos, no requieren disco persistente.
 
 ## Exportación Excel
 
@@ -141,7 +150,25 @@ Los reportes de asistencias, incidencias y general aceptan filtros por fecha de 
 
 El reporte general incluye varias hojas: resumen, empleados, asistencias, incidencias y auditoría.
 
-## Plantilla Excel
+## Correcciones masivas desde Excel
+
+Ruta:
+
+```txt
+/correcciones
+```
+
+Flujo:
+
+```txt
+Exportar Excel editable → modificar columnas permitidas → reimportar → analizar cambios → aplicar lote
+```
+
+El sistema compara el Excel contra la base de datos y aplica solo alteraciones válidas, con auditoría por campo y por lote.
+
+Solo usuarios Admin pueden usar este módulo.
+
+## Plantilla Excel de empleados
 
 La plantilla se descarga desde:
 
@@ -158,7 +185,6 @@ Columnas esperadas:
 - Turno
 - Estado
 - Tiene vehiculo
-- Requiere fotos vehiculo
 - Observaciones
 
 ## QR
@@ -173,18 +199,9 @@ EMP-000123
 
 El sistema usa ese ID para consultar la base de datos.
 
-## Fotos
-
-Regla de diseño:
-
-- No se toma foto del personal en entrada ni salida.
-- Solo se muestra la foto registrada del empleado.
-- Si el empleado tiene vehículo, se capturan fotos del vehículo.
-- No se captura placa como campo.
-
 ## Usuario administrador inicial
 
-Esta versión crea automáticamente un usuario administrador inicial cuando la base de datos está vacía o cuando todavía no existe ese usuario:
+Esta versión crea automáticamente un usuario administrador inicial cuando todavía no existe ese usuario:
 
 ```txt
 Usuario: Admin4rd
@@ -202,9 +219,10 @@ Rutas administrativas protegidas por login:
 /importar
 /qr
 /exportar
+/correcciones
 ```
 
-La pantalla de vigilancia (`/vigilancia`) queda disponible para operación rápida de entrada/salida. Las altas, ediciones, importación, exportación, QR y monitoreo quedan detrás del acceso Admin.
+La pantalla de vigilancia (`/vigilancia`) queda disponible para operación rápida de entrada/salida.
 
 Para producción, cambia la clave inicial desde variables de entorno o agrega después un módulo de administración de usuarios. Usar credenciales fijas eternamente es cómodo, sí, igual que dejar la llave abajo del tapete.
 
@@ -218,38 +236,3 @@ SESSION_COOKIE_SECURE=0
 ```
 
 En Render puedes poner `SESSION_COOKIE_SECURE=1` cuando ya esté funcionando sobre HTTPS.
-
-## Correcciones masivas por Excel
-
-Ruta principal:
-
-```txt
-/correcciones
-```
-
-Flujo:
-
-1. Admin descarga un Excel editable desde `/correcciones`.
-2. Modifica únicamente columnas nuevas, por ejemplo:
-   - `entrada_nueva`
-   - `salida_nueva`
-   - `turno_nuevo`
-   - `fecha_turno_nueva`
-   - `motivo_retardo_nuevo`
-   - `motivo_salida_temprana_nuevo`
-   - `observaciones_nuevas`
-   - `motivo_correccion`
-3. Reimporta el Excel.
-4. El sistema compara contra la base actual.
-5. Detecta cambios por campo.
-6. Valida errores y control de versión (`updated_at_actual`).
-7. Muestra previsualización.
-8. Solo Admin puede aplicar el lote.
-9. Cada cambio queda registrado en auditoría con folio de lote.
-
-Reglas:
-
-- Celda vacía en columna nueva = no modificar.
-- Para borrar un valor editable, escribir `BORRAR`.
-- Si falta `motivo_correccion`, el lote no se aplica.
-- Si el registro cambió después de exportar, se bloquea esa fila y se debe exportar de nuevo.

@@ -498,13 +498,13 @@ def get_employees_export_rows(conn: Connection):
     employees = fetch_all(conn, "SELECT * FROM employees ORDER BY nombre")
     headers = [
         "ID empleado", "Nombre", "Área", "Puesto", "Turno", "Estado", "Tiene vehículo",
-        "Requiere fotos vehículo", "QR activo", "Foto registrada", "Observaciones", "Creado", "Actualizado"
+        "QR activo", "Observaciones", "Creado", "Actualizado"
     ]
     rows = [
         [
             emp["id"], emp["nombre"], emp["area"], emp["puesto"], emp["turno"], emp["estado"],
-            bool_text(emp["tiene_vehiculo"]), bool_text(emp["requiere_fotos_vehiculo"]), bool_text(emp["qr_activo"]),
-            emp["foto_path"], emp["observaciones"], short_datetime(emp["created_at"]), short_datetime(emp["updated_at"]),
+            bool_text(emp["tiene_vehiculo"]), bool_text(emp["qr_activo"]),
+            emp["observaciones"], short_datetime(emp["created_at"]), short_datetime(emp["updated_at"]),
         ]
         for emp in employees
     ]
@@ -524,7 +524,6 @@ def get_attendance_export_rows(conn: Connection, fecha_inicio: Optional[str] = N
         "ID registro", "ID empleado", "Nombre", "Área", "Puesto", "Fecha turno", "Turno",
         "Entrada", "Salida", "Guardia entrada", "Guardia salida", "Estado entrada", "Estado salida",
         "Motivo retardo", "Motivo salida temprana", "Vehículo esperado", "Vehículo registrado",
-        "Foto frontal entrada", "Foto cajuela entrada", "Foto frontal salida", "Foto cajuela salida",
         "Incidencia / observaciones", "Creado", "Actualizado"
     ]
     rows = [
@@ -533,7 +532,6 @@ def get_attendance_export_rows(conn: Connection, fecha_inicio: Optional[str] = N
             row["shift_date"], row["turno"], short_datetime(row["entry_at"]), short_datetime(row["exit_at"]),
             row["entry_guard"], row["exit_guard"], row["entry_status"], row["exit_status"], row["late_reason"],
             row["early_reason"], bool_text(row["vehicle_expected"]), bool_text(row["vehicle_entered"]),
-            row["vehicle_front_entry"], row["vehicle_trunk_entry"], row["vehicle_front_exit"], row["vehicle_trunk_exit"],
             row["incident"], short_datetime(row["created_at"]), short_datetime(row["updated_at"]),
         ]
         for row in records
@@ -552,18 +550,12 @@ def get_incidents_export_rows(conn: Connection, fecha_inicio: Optional[str] = No
             COALESCE(a.entry_status, '') = 'Tarde'
             OR COALESCE(a.exit_status, '') = 'Salida temprana'
             OR COALESCE(a.incident, '') != ''
-            OR (a.vehicle_entered = 1 AND (
-                COALESCE(a.vehicle_front_entry, '') = ''
-                OR COALESCE(a.vehicle_trunk_entry, '') = ''
-                OR (a.exit_at IS NOT NULL AND COALESCE(a.vehicle_front_exit, '') = '')
-                OR (a.exit_at IS NOT NULL AND COALESCE(a.vehicle_trunk_exit, '') = '')
-            ))
           )
         ORDER BY a.updated_at DESC
     """, params)
     headers = [
         "ID registro", "ID empleado", "Nombre", "Área", "Fecha turno", "Turno", "Tipo incidencia",
-        "Entrada", "Salida", "Motivo", "Observaciones", "Vehículo registrado", "Faltan fotos vehículo"
+        "Entrada", "Salida", "Motivo", "Observaciones", "Vehículo registrado"
     ]
     rows = []
     for row in records:
@@ -574,23 +566,10 @@ def get_incidents_export_rows(conn: Connection, fecha_inicio: Optional[str] = No
             tipo.append("Salida temprana")
         if row["incident"]:
             tipo.append("Observación")
-        missing_vehicle_photos = []
-        if row["vehicle_entered"]:
-            if not row["vehicle_front_entry"]:
-                missing_vehicle_photos.append("frontal entrada")
-            if not row["vehicle_trunk_entry"]:
-                missing_vehicle_photos.append("cajuela entrada")
-            if row["exit_at"] and not row["vehicle_front_exit"]:
-                missing_vehicle_photos.append("frontal salida")
-            if row["exit_at"] and not row["vehicle_trunk_exit"]:
-                missing_vehicle_photos.append("cajuela salida")
-        if missing_vehicle_photos:
-            tipo.append("Fotos vehículo incompletas")
         rows.append([
             row["id"], row["employee_id"], row.get("nombre") or "", row.get("area") or "", row["shift_date"], row["turno"],
             ", ".join(tipo) or "Incidencia", short_datetime(row["entry_at"]), short_datetime(row["exit_at"]),
             row["late_reason"] or row["early_reason"] or "", row["incident"], bool_text(row["vehicle_entered"]),
-            ", ".join(missing_vehicle_photos),
         ])
     return headers, rows
 
@@ -638,7 +617,7 @@ def add_summary_sheet(wb: Workbook, conn: Connection, fecha_inicio: Optional[str
         ws.append([label, value])
 
     ws.append([])
-    ws.append(["Nota", "El QR contiene únicamente el ID del empleado. No se captura placa y no se toma foto del personal en entrada/salida."])
+    ws.append(["Nota", "El QR contiene únicamente el ID del empleado. Esta versión no captura imágenes ni placas; la evidencia visual se mantiene por WhatsApp."])
     style_worksheet(ws, "")
     ws["A1"].font = Font(color="051A39", bold=True, size=16)
     ws.column_dimensions["A"].width = 34
@@ -985,7 +964,7 @@ def seed_demo_if_empty() -> None:
         demo = [
             {
                 "id": "EMP-000123", "nombre": "Juan Pérez", "area": "Producción", "puesto": "Operador", "turno": "Día",
-                "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 1, "foto_path": "", "qr_activo": 1,
+                "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 0, "foto_path": "", "qr_activo": 1,
                 "observaciones": "Demo con vehículo", "created_at": ts, "updated_at": ts,
             },
             {
@@ -995,7 +974,7 @@ def seed_demo_if_empty() -> None:
             },
             {
                 "id": "EMP-000125", "nombre": "Carlos Ramos", "area": "Almacén", "puesto": "Auxiliar", "turno": "Noche",
-                "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 1, "foto_path": "", "qr_activo": 1,
+                "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 0, "foto_path": "", "qr_activo": 1,
                 "observaciones": "Demo turno noche", "created_at": ts, "updated_at": ts,
             },
         ]
@@ -1197,7 +1176,7 @@ async def empleado_guardar(
     if not employee_id or not nombre.strip():
         raise HTTPException(status_code=400, detail="ID y nombre son obligatorios")
     ts = now_mx().isoformat()
-    foto_path = await save_upload(foto, EMPLOYEE_PHOTOS_DIR, employee_id) if foto and foto.filename else ""
+    foto_path = ""
     with engine.begin() as conn:
         exists = get_employee(conn, employee_id)
         if exists:
@@ -1250,9 +1229,8 @@ async def empleado_actualizar(
         emp = get_employee(conn, employee_id)
         if not emp:
             raise HTTPException(status_code=404, detail="Empleado no encontrado")
-        foto_path = emp["foto_path"]
-        if foto and foto.filename:
-            foto_path = await save_upload(foto, EMPLOYEE_PHOTOS_DIR, employee_id)
+        foto_path = emp["foto_path"] or ""
+        # Versión sin imágenes: no se cargan ni reemplazan fotos desde expediente.
         conn.execute(
             text(
                 """
@@ -1304,12 +1282,11 @@ def plantilla_empleados(request: Request):
         "Turno",
         "Estado",
         "Tiene vehiculo",
-        "Requiere fotos vehiculo",
         "Observaciones",
     ]
     ws.append(headers)
-    ws.append(["EMP-000126", "Nombre Apellido", "Producción", "Operador", "Día", "Activo", "Sí", "Sí", "Ejemplo"])
-    ws.append(["EMP-000127", "Nombre Apellido", "Calidad", "Inspectora", "Noche", "Activo", "No", "No", "Ejemplo"])
+    ws.append(["EMP-000126", "Nombre Apellido", "Producción", "Operador", "Día", "Activo", "Sí", "Ejemplo"])
+    ws.append(["EMP-000127", "Nombre Apellido", "Calidad", "Inspectora", "Noche", "Activo", "No", "Ejemplo"])
     for col in range(1, len(headers) + 1):
         ws.column_dimensions[chr(64 + col)].width = 24
     output = io.BytesIO()
@@ -1373,7 +1350,7 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
         puesto = as_text(row[index_for("puesto")]) if index_for("puesto") is not None else ""
         observaciones = as_text(row[index_for("observaciones")]) if index_for("observaciones") is not None else ""
         tiene_vehiculo = bool_from_excel(row[index_for("tiene_vehiculo")]) if index_for("tiene_vehiculo") is not None else 0
-        requiere_fotos = bool_from_excel(row[index_for("requiere_fotos_vehiculo")]) if index_for("requiere_fotos_vehiculo") is not None else tiene_vehiculo
+        requiere_fotos = 0
 
         if not employee_id:
             errors.append(f"Fila {row_number}: falta ID empleado")
@@ -1739,7 +1716,7 @@ def api_empleado(employee_id: str):
     return {
         "ok": True,
         "employee": emp,
-        "foto_url": f"/uploads/{emp['foto_path']}" if emp["foto_path"] else "",
+        "foto_url": "",
         "has_open_attendance": bool(open_att),
         "open_attendance": open_att,
     }
@@ -1770,16 +1747,12 @@ async def api_registro(
         if not emp["qr_activo"]:
             return JSONResponse(status_code=400, content={"ok": False, "message": "QR inactivo"})
 
-    vehicle_required = bool(int(vehiculo or "0")) or bool(emp["tiene_vehiculo"]) or bool(emp["requiere_fotos_vehiculo"])
+    vehicle_required = bool(int(vehiculo or "0")) or bool(emp["tiene_vehiculo"])
 
-    if vehicle_required:
-        if not foto_frontal or not foto_frontal.filename:
-            return JSONResponse(status_code=400, content={"ok": False, "message": "Falta foto frontal del vehículo"})
-        if not foto_cajuela or not foto_cajuela.filename:
-            return JSONResponse(status_code=400, content={"ok": False, "message": "Falta foto de cajuela"})
-
-    front_path = await save_upload(foto_frontal, VEHICLE_PHOTOS_DIR, f"{employee_id}_{movimiento}_frontal") if foto_frontal and foto_frontal.filename else ""
-    trunk_path = await save_upload(foto_cajuela, VEHICLE_PHOTOS_DIR, f"{employee_id}_{movimiento}_cajuela") if foto_cajuela and foto_cajuela.filename else ""
+    # Versión Render Free: no se capturan ni almacenan imágenes.
+    # La evidencia visual del vehículo se mantiene en bitácora externa de WhatsApp.
+    front_path = ""
+    trunk_path = ""
 
     with engine.begin() as conn:
         if movimiento == "entrada":
@@ -1843,9 +1816,6 @@ async def api_registro(
             status = exit_status(open_att["turno"], open_att["shift_date"], dt)
             if status == "Salida temprana" and not motivo_salida_temprana.strip():
                 return JSONResponse(status_code=400, content={"ok": False, "message": "Salida temprana: captura motivo"})
-
-            if open_att["vehicle_entered"] and not vehicle_required:
-                return JSONResponse(status_code=400, content={"ok": False, "message": "Entró con vehículo. Se requieren fotos de salida del vehículo."})
 
             conn.execute(
                 text(

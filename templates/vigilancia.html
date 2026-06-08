@@ -2,7 +2,7 @@
 {% block content %}
 <section class="page-head">
   <h2>Vigilancia</h2>
-  <p>Mobile First: escanear QR, validar foto registrada del empleado y capturar fotos del vehículo cuando aplique.</p>
+  <p>Mobile First: escanear QR, validar datos del empleado y registrar entrada/salida. En esta versión no se capturan imágenes.</p>
 </section>
 
 <div class="vigilancia-grid">
@@ -46,7 +46,7 @@
     </div>
 
     <div class="alert info">
-      El personal NO se fotografía. El vigilante valida visualmente contra la foto registrada en el expediente.
+      En esta versión no se capturan imágenes. La evidencia visual del vehículo se mantiene por la bitácora externa de WhatsApp.
     </div>
 
     <form id="attendanceForm" class="form-stack">
@@ -61,20 +61,8 @@
       </label>
 
       <section id="vehiclePhotos" class="vehicle-panel hidden">
-        <h3>Fotos del vehículo</h3>
-        <p class="muted">Sin placa como dato. Solo evidencia visual del vehículo y cajuela.</p>
-        <div class="photo-grid">
-          <label class="photo-box">
-            <span>🚘</span>
-            Foto frontal del vehículo
-            <input type="file" name="foto_frontal" accept="image/*" capture="environment" />
-          </label>
-          <label class="photo-box">
-            <span>🧳</span>
-            Foto de cajuela
-            <input type="file" name="foto_cajuela" accept="image/*" capture="environment" />
-          </label>
-        </div>
+        <h3>Vehículo registrado</h3>
+        <p class="muted">No se capturan fotos ni placas en esta versión. La evidencia del vehículo se lleva por WhatsApp.</p>
       </section>
 
       <section id="latePanel" class="incident-panel">
