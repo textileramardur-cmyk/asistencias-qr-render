@@ -4,6 +4,8 @@ import json
 import os
 import re
 import secrets
+import unicodedata
+import zipfile
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from pathlib import Path
@@ -34,9 +36,16 @@ DB_PATH = DATA_DIR / "asistencias.db"
 
 AUTH_COOKIE_NAME = "asistencias_session"
 SESSION_DAYS = int(os.getenv("SESSION_DAYS", "14"))
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "0") == "1"
-DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "Admin4rd")
-DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Adm4rd")
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
+LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "6"))
+LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
+# Usuarios semilla solicitados para beta. Se guardan con hash, no en texto plano en la base.
+DEFAULT_SYSTEM_USERS = [
+    {"username": "Adjm", "password": "Adjm4rdur", "role": "Supremo", "display_name": "Usuario Supremo"},
+    {"username": "Admin4rd", "password": "Adm4rd", "role": "Admin", "display_name": "Administrador"},
+    {"username": "Altima", "password": "Altima", "role": "Vigilancia", "display_name": "Vigilancia Altima"},
+    {"username": "Adhm4", "password": "4dhm", "role": "RH", "display_name": "Jefa de RH"},
+]
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,6 +75,21 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), geolocation=(), microphone=()")
+    # CSP prudente para esta app. Permitimos inline por las plantillas actuales, pero cerramos fuentes externas.
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    )
+    return response
+
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -80,9 +104,28 @@ def clean_id(value: str) -> str:
     return value[:40]
 
 
+def clean_username(value: str) -> str:
+    # Usuario seguro pero respetando mayúsculas/minúsculas solicitadas.
+    value = (value or "").strip()
+    value = re.sub(r"[^A-Za-z0-9_.@\-]", "", value)
+    return value[:60]
+
+
 def safe_filename(value: str) -> str:
     value = clean_id(value) or "ARCHIVO"
     return value
+
+
+def filename_slug(value: str, fallback: str = "archivo") -> str:
+    """Nombre seguro para archivos descargables, conservando lectura humana."""
+    value = as_text(value) if "as_text" in globals() else str(value or "").strip()
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    value = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_")
+    return (value or fallback)[:90]
+
+
+def employee_file_base(emp: dict) -> str:
+    return f"{filename_slug(emp.get('nombre') or 'Empleado')}_{filename_slug(emp.get('id') or 'SIN_ID')}"
 
 
 def bool_from_excel(value) -> int:
@@ -305,8 +348,16 @@ def init_db() -> None:
                 conn.exec_driver_sql(f"ALTER TABLE shift_settings ADD COLUMN {col} {definition}")
 
         user_columns = get_table_columns(conn, "users")
-        if "display_name" not in user_columns:
-            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''")
+        user_add_columns = {
+            "display_name": "TEXT DEFAULT ''",
+            "failed_login_attempts": "INTEGER DEFAULT 0",
+            "locked_until": "TEXT DEFAULT ''",
+            "last_login_at": "TEXT DEFAULT ''",
+            "password_changed_at": "TEXT DEFAULT ''",
+        }
+        for col, definition in user_add_columns.items():
+            if col not in user_columns:
+                conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {definition}")
 
         ts = now_mx().isoformat()
         defaults = [
@@ -643,27 +694,96 @@ def parse_dt(value: str) -> Optional[datetime]:
 
 
 def seed_admin_user() -> None:
-    with engine.begin() as conn:
-        existing = fetch_one(conn, "SELECT * FROM users WHERE username = :username", {"username": DEFAULT_ADMIN_USERNAME})
-        if existing:
-            return
-        ts = now_mx().isoformat()
-        conn.execute(
-            text(
-                """
-                INSERT INTO users (username, password_hash, role, active, display_name, created_at, updated_at)
-                VALUES (:username, :password_hash, 'Admin', 1, 'Administrador', :created_at, :updated_at)
-                """
-            ),
-            {
-                "username": DEFAULT_ADMIN_USERNAME,
-                "password_hash": hash_password(DEFAULT_ADMIN_PASSWORD),
-                "created_at": ts,
-                "updated_at": ts,
-            }
-        )
-        audit(conn, "users", DEFAULT_ADMIN_USERNAME, "CREATE", "Sistema", reason="Usuario administrador inicial")
+    """Crea/actualiza usuarios base solicitados.
 
+    Para esta beta sincronizamos rol y clave en cada arranque para asegurar que Render
+    quede con los accesos correctos. Las claves quedan hasheadas en base de datos.
+    """
+    with engine.begin() as conn:
+        ts = now_mx().isoformat()
+        for seed in DEFAULT_SYSTEM_USERS:
+            existing = fetch_one(conn, "SELECT * FROM users WHERE username = :username", {"username": seed["username"]})
+            password_hash = hash_password(seed["password"])
+            if existing:
+                old_role = existing.get("role") or ""
+                conn.execute(
+                    text("""
+                        UPDATE users
+                        SET password_hash=:password_hash, role=:role, active=1, display_name=:display_name,
+                            failed_login_attempts=0, locked_until='', password_changed_at=:password_changed_at, updated_at=:updated_at
+                        WHERE username=:username
+                    """),
+                    {
+                        "username": seed["username"],
+                        "password_hash": password_hash,
+                        "role": seed["role"],
+                        "display_name": seed["display_name"],
+                        "password_changed_at": ts,
+                        "updated_at": ts,
+                    },
+                )
+                if old_role != seed["role"]:
+                    audit(conn, "users", seed["username"], "UPDATE", "Sistema", "role", old_role, seed["role"], "Sincronización de usuarios base")
+            else:
+                conn.execute(
+                    text("""
+                        INSERT INTO users (username, password_hash, role, active, display_name, failed_login_attempts, locked_until, last_login_at, password_changed_at, created_at, updated_at)
+                        VALUES (:username, :password_hash, :role, 1, :display_name, 0, '', '', :password_changed_at, :created_at, :updated_at)
+                    """),
+                    {
+                        "username": seed["username"],
+                        "password_hash": password_hash,
+                        "role": seed["role"],
+                        "display_name": seed["display_name"],
+                        "password_changed_at": ts,
+                        "created_at": ts,
+                        "updated_at": ts,
+                    },
+                )
+                audit(conn, "users", seed["username"], "CREATE", "Sistema", reason=f"Usuario base {seed['role']}")
+
+
+def is_safe_next_url(value: str) -> bool:
+    value = as_text(value)
+    return bool(value.startswith("/") and not value.startswith("//") and "\\" not in value)
+
+
+def get_client_key(request: Request, username: str) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    ip = forwarded or (request.client.host if request.client else "unknown")
+    return f"{ip}:{username.strip().lower()}"
+
+
+def login_is_locked(conn: Connection, username: str) -> tuple[bool, str]:
+    row = fetch_one(conn, "SELECT failed_login_attempts, locked_until FROM users WHERE username=:username", {"username": username})
+    if not row:
+        return False, ""
+    locked_until = parse_dt(row.get("locked_until") or "")
+    if locked_until and locked_until > now_mx():
+        return True, locked_until.strftime("%H:%M")
+    return False, ""
+
+
+def register_login_failure(conn: Connection, username: str, request: Request) -> None:
+    row = fetch_one(conn, "SELECT failed_login_attempts FROM users WHERE username=:username", {"username": username})
+    if not row:
+        return
+    attempts = int(row.get("failed_login_attempts") or 0) + 1
+    locked_until = ""
+    if attempts >= LOGIN_MAX_ATTEMPTS:
+        locked_until = (now_mx() + timedelta(minutes=LOGIN_LOCK_MINUTES)).isoformat()
+    conn.execute(
+        text("UPDATE users SET failed_login_attempts=:attempts, locked_until=:locked_until, updated_at=:updated_at WHERE username=:username"),
+        {"username": username, "attempts": attempts, "locked_until": locked_until, "updated_at": now_mx().isoformat()},
+    )
+    log_event(conn, "alerta", "auth", "login_failure", f"Intento fallido de acceso para {username}", username, get_client_key(request, username))
+
+
+def register_login_success(conn: Connection, username: str) -> None:
+    conn.execute(
+        text("UPDATE users SET failed_login_attempts=0, locked_until='', last_login_at=:last_login_at, updated_at=:updated_at WHERE username=:username"),
+        {"username": username, "last_login_at": now_mx().isoformat(), "updated_at": now_mx().isoformat()},
+    )
 
 def get_current_user(request: Request):
     token = request.cookies.get(AUTH_COOKIE_NAME, "")
@@ -714,15 +834,31 @@ def require_role_http(request: Request, roles: set[str]):
 
 
 def require_admin_page(request: Request):
-    return require_role_page(request, {"Admin"})
+    return require_role_page(request, {"Admin", "Supremo"})
 
 
 def require_admin_http(request: Request):
-    return require_role_http(request, {"Admin"})
+    return require_role_http(request, {"Admin", "Supremo"})
+
+
+def require_supremo_page(request: Request):
+    return require_role_page(request, {"Supremo"})
+
+
+def require_supremo_http(request: Request):
+    return require_role_http(request, {"Supremo"})
+
+
+def require_rh_page(request: Request):
+    return require_role_page(request, {"RH", "Admin", "Supremo"})
+
+
+def require_rh_http(request: Request):
+    return require_role_http(request, {"RH", "Admin", "Supremo"})
 
 
 def require_vigilancia_http(request: Request):
-    return require_role_http(request, {"Admin", "Vigilancia"})
+    return require_role_http(request, {"Admin", "Supremo", "Vigilancia"})
 
 
 templates.env.globals["get_current_user"] = get_current_user
@@ -1366,14 +1502,25 @@ def login_page(request: Request, next: str = "/monitor", error: str = ""):
 
 @app.post("/login")
 def login_submit(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("/monitor")):
+    username = clean_username(username)
     with engine.begin() as conn:
-        user = fetch_one(conn, "SELECT * FROM users WHERE username = :username AND active = 1", {"username": username.strip()})
+        locked, locked_time = login_is_locked(conn, username)
+        if locked:
+            return templates.TemplateResponse(
+                "login.html",
+                {"request": request, "next": next or "/monitor", "error": f"Usuario bloqueado temporalmente por intentos fallidos. Intenta después de las {locked_time}."},
+                status_code=429,
+            )
+        user = fetch_one(conn, "SELECT * FROM users WHERE username = :username AND active = 1", {"username": username})
         if not user or not verify_password(password, user["password_hash"]):
+            if user:
+                register_login_failure(conn, username, request)
             return templates.TemplateResponse(
                 "login.html",
                 {"request": request, "next": next or "/monitor", "error": "Usuario o clave incorrectos."},
                 status_code=401,
             )
+        register_login_success(conn, user["username"])
         token = secrets.token_urlsafe(32)
         expires_at = (now_mx() + timedelta(days=SESSION_DAYS)).isoformat()
         conn.execute(
@@ -1387,8 +1534,14 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         )
         audit(conn, "users", user["username"], "LOGIN", user["username"], reason="Inicio de sesión")
 
-    if not next or not next.startswith("/") or next == "/monitor" and user.get("role") == "Vigilancia":
-        safe_next = "/vigilancia" if user.get("role") == "Vigilancia" else "/monitor"
+    role = user.get("role")
+    if not is_safe_next_url(next) or (next == "/monitor" and role in {"Vigilancia", "RH"}):
+        if role == "Vigilancia":
+            safe_next = "/vigilancia"
+        elif role == "RH":
+            safe_next = "/rh"
+        else:
+            safe_next = "/monitor"
     else:
         safe_next = next
     response = RedirectResponse(url=safe_next, status_code=303)
@@ -1397,7 +1550,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
         token,
         httponly=True,
         secure=SESSION_COOKIE_SECURE,
-        samesite="lax",
+        samesite="strict",
         max_age=SESSION_DAYS * 24 * 60 * 60,
     )
     return response
@@ -1413,21 +1566,24 @@ def logout(request: Request):
             if user:
                 audit(conn, "users", user["username"], "LOGOUT", user["username"], reason="Cierre de sesión")
     response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(AUTH_COOKIE_NAME)
+    response.delete_cookie(AUTH_COOKIE_NAME, path="/", secure=SESSION_COOKIE_SECURE, samesite="strict")
     return response
 
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     user = get_current_user(request)
-    if user and user.get("role") == "Admin":
-        return RedirectResponse(url="/monitor")
+    if user:
+        if user.get("role") in {"Admin", "Supremo"}:
+            return RedirectResponse(url="/monitor")
+        if user.get("role") == "RH":
+            return RedirectResponse(url="/rh")
     return RedirectResponse(url="/vigilancia")
 
 
 @app.get("/vigilancia", response_class=HTMLResponse)
 def vigilancia(request: Request):
-    user = require_role_page(request, {"Admin", "Vigilancia"})
+    user = require_role_page(request, {"Admin", "Supremo", "Vigilancia"})
     if not user:
         return admin_login_redirect(request)
     with engine.begin() as conn:
@@ -1729,13 +1885,18 @@ def usuarios_guardar(
     active: str = Form("1"),
 ):
     admin_user = require_admin_http(request)
-    username = clean_id(username)
-    role = role if role in {"Admin", "Vigilancia"} else "Vigilancia"
+    username = clean_username(username)
+    role = role if role in {"Supremo", "Admin", "Vigilancia", "RH"} else "Vigilancia"
+    # Solo Supremo puede crear, editar o degradar usuarios Supremo. Evita escalamiento interno accidental.
+    if role == "Supremo" and admin_user.get("role") != "Supremo":
+        raise HTTPException(status_code=403, detail="Solo un usuario Supremo puede asignar el rol Supremo")
     if not username:
         raise HTTPException(status_code=400, detail="Usuario obligatorio")
     ts = now_mx().isoformat()
     with engine.begin() as conn:
         existing = fetch_one(conn, "SELECT * FROM users WHERE username = :username", {"username": username})
+        if existing and existing.get("role") == "Supremo" and admin_user.get("role") != "Supremo":
+            raise HTTPException(status_code=403, detail="Solo un usuario Supremo puede modificar usuarios Supremo")
         if existing:
             updates = ["role=:role", "active=:active", "display_name=:display_name", "updated_at=:updated_at"]
             params = {"username": username, "role": role, "active": 1 if active == "1" else 0, "display_name": as_text(display_name), "updated_at": ts}
@@ -1853,7 +2014,7 @@ def reporte_semanal_page(request: Request, semana: Optional[str] = None, area: s
 
 @app.get("/reportes/semanal.xlsx")
 def reporte_semanal_excel(request: Request, semana: Optional[str] = None, area: str = "", turno: str = ""):
-    require_admin_http(request)
+    require_rh_http(request)
     start, end = week_bounds(semana)
     params = {"start": start.isoformat(), "end": end.isoformat()}
     filters = ["a.shift_date >= :start", "a.shift_date <= :end"]
@@ -1893,6 +2054,122 @@ def reporte_semanal_excel(request: Request, semana: Optional[str] = None, area: 
         ws.append([r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), r.get("registros") or 0, r.get("retardos") or 0, r.get("min_retardo") or 0, r.get("salidas_tempranas") or 0, r.get("min_temprano") or 0, r.get("extras") or 0, r.get("min_extra") or 0, r.get("salidas_provisionales") or 0, r.get("pendientes_revision") or 0, r.get("abiertas") or 0, r.get("anulados") or 0])
     style_worksheet(ws, f"Reporte semanal {start.isoformat()} a {end.isoformat()}")
     return workbook_response(wb, f"reporte_semanal_{start.isoformat()}_{end.isoformat()}.xlsx")
+
+
+
+@app.get("/rh", response_class=HTMLResponse)
+def rh_dashboard(request: Request, fecha: Optional[str] = None):
+    rh_user = require_rh_page(request)
+    if not rh_user:
+        return admin_login_redirect(request)
+    fecha = fecha or now_mx().date().isoformat()
+    start, end = week_bounds(None)
+    with engine.begin() as conn:
+        auto_close_overdue_records(conn, rh_user["username"])
+        summary = {
+            "presentes": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND entry_at IS NOT NULL"), {"fecha": fecha}).scalar() or 0,
+            "retardos": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND entry_status IN ('Tarde','Retardo')"), {"fecha": fecha}).scalar() or 0,
+            "min_retardo": conn.execute(text("SELECT COALESCE(SUM(late_minutes),0) FROM attendance WHERE shift_date=:fecha AND entry_status IN ('Tarde','Retardo')"), {"fecha": fecha}).scalar() or 0,
+            "salidas_tempranas": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND exit_status='Salida temprana'"), {"fecha": fecha}).scalar() or 0,
+            "extras": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND exit_status='Extra'"), {"fecha": fecha}).scalar() or 0,
+            "pendientes_revision": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE review_required=1"), {}).scalar() or 0,
+        }
+        daily_rows = fetch_all(conn, """
+            SELECT a.*, e.nombre, e.area, e.puesto
+            FROM attendance a
+            JOIN employees e ON e.id = a.employee_id
+            WHERE a.shift_date=:fecha
+            ORDER BY COALESCE(a.entry_at, a.created_at) ASC
+        """, {"fecha": fecha})
+        weekly_rows = fetch_all(conn, """
+            SELECT e.id AS employee_id, e.nombre, e.area, COALESCE(a.turno, e.turno) AS turno,
+                   COUNT(a.id) AS registros,
+                   SUM(CASE WHEN a.entry_status IN ('Tarde','Retardo') THEN 1 ELSE 0 END) AS retardos,
+                   SUM(COALESCE(a.late_minutes,0)) AS min_retardo,
+                   SUM(CASE WHEN a.exit_status = 'Salida temprana' THEN 1 ELSE 0 END) AS salidas_tempranas,
+                   SUM(CASE WHEN a.exit_status = 'Extra' THEN 1 ELSE 0 END) AS extras,
+                   SUM(COALESCE(a.extra_minutes,0)) AS min_extra,
+                   SUM(CASE WHEN a.review_required = 1 THEN 1 ELSE 0 END) AS pendientes_revision
+            FROM employees e
+            LEFT JOIN attendance a ON a.employee_id = e.id AND a.shift_date >= :start AND a.shift_date <= :end
+            WHERE e.estado = 'Activo'
+            GROUP BY e.id, e.nombre, e.area, COALESCE(a.turno, e.turno)
+            ORDER BY min_retardo DESC, retardos DESC, e.nombre
+            LIMIT 80
+        """, {"start": start.isoformat(), "end": end.isoformat()})
+    return templates.TemplateResponse("rh.html", {
+        "request": request, "fecha": fecha, "summary": summary, "daily_rows": daily_rows,
+        "weekly_rows": weekly_rows, "start": start, "end": end,
+    })
+
+
+@app.get("/supremo/registros", response_class=HTMLResponse)
+def supremo_registros_page(request: Request):
+    supremo = require_supremo_page(request)
+    if not supremo:
+        return admin_login_redirect(request)
+    today = now_mx().date().isoformat()
+    with engine.begin() as conn:
+        total = conn.execute(text("SELECT COUNT(*) FROM attendance")).scalar() or 0
+        recent = fetch_all(conn, """
+            SELECT a.*, e.nombre
+            FROM attendance a
+            LEFT JOIN employees e ON e.id = a.employee_id
+            ORDER BY a.updated_at DESC
+            LIMIT 40
+        """)
+    return templates.TemplateResponse("supremo_registros.html", {"request": request, "total": total, "recent": recent, "today": today, "message": ""})
+
+
+@app.post("/supremo/registros/borrar", response_class=HTMLResponse)
+def supremo_registros_borrar(
+    request: Request,
+    mode: str = Form(...),
+    attendance_id: str = Form(""),
+    fecha_inicio: str = Form(""),
+    fecha_fin: str = Form(""),
+    confirmacion: str = Form(""),
+):
+    supremo = require_supremo_http(request)
+    deleted = 0
+    message = ""
+    if as_text(confirmacion).upper() != "BORRAR":
+        raise HTTPException(status_code=400, detail="Para borrar registros debes escribir BORRAR en confirmación")
+    with engine.begin() as conn:
+        if mode == "id":
+            rid = int(attendance_id)
+            row = fetch_one(conn, "SELECT * FROM attendance WHERE id=:id", {"id": rid})
+            if row:
+                audit(conn, "attendance", str(rid), "DELETE_BETA", supremo["username"], reason="Borrado beta por usuario Supremo")
+                conn.execute(text("DELETE FROM attendance WHERE id=:id"), {"id": rid})
+                deleted = 1
+        elif mode == "rango":
+            if not fecha_inicio or not fecha_fin:
+                raise HTTPException(status_code=400, detail="Fecha inicio y fin son obligatorias")
+            ids = fetch_all(conn, "SELECT id FROM attendance WHERE shift_date >= :fi AND shift_date <= :ff", {"fi": fecha_inicio, "ff": fecha_fin})
+            for row in ids:
+                audit(conn, "attendance", str(row["id"]), "DELETE_BETA", supremo["username"], reason=f"Borrado beta por rango {fecha_inicio} a {fecha_fin}")
+            conn.execute(text("DELETE FROM attendance WHERE shift_date >= :fi AND shift_date <= :ff"), {"fi": fecha_inicio, "ff": fecha_fin})
+            deleted = len(ids)
+        elif mode == "todos":
+            ids = fetch_all(conn, "SELECT id FROM attendance")
+            for row in ids:
+                audit(conn, "attendance", str(row["id"]), "DELETE_BETA", supremo["username"], reason="Borrado beta total de registros de asistencia")
+            conn.execute(text("DELETE FROM attendance"))
+            deleted = len(ids)
+        else:
+            raise HTTPException(status_code=400, detail="Modo inválido")
+        log_event(conn, "alerta", "supremo", "delete_beta", f"Borrado beta de {deleted} registros de asistencia", supremo["username"], mode)
+        total = conn.execute(text("SELECT COUNT(*) FROM attendance")).scalar() or 0
+        recent = fetch_all(conn, """
+            SELECT a.*, e.nombre
+            FROM attendance a
+            LEFT JOIN employees e ON e.id = a.employee_id
+            ORDER BY a.updated_at DESC
+            LIMIT 40
+        """)
+        message = f"Se borraron {deleted} registros de asistencia. Auditoría conservada."
+    return templates.TemplateResponse("supremo_registros.html", {"request": request, "total": total, "recent": recent, "today": now_mx().date().isoformat(), "message": message})
 
 
 @app.get("/personal", response_class=HTMLResponse)
@@ -2390,6 +2667,91 @@ def exportar_general_excel(request: Request, fecha_inicio: Optional[str] = None,
     filename = f"reporte_general_{fecha_inicio or 'todo'}_{fecha_fin or 'todo'}_{now_mx().strftime('%Y%m%d_%H%M')}.xlsx"
     return workbook_response(wb, filename)
 
+def make_qr_core(employee_id: str, size: int = 900) -> Image.Image:
+    return qrcode.make(employee_id).convert("RGB").resize((size, size))
+
+
+def generate_simple_qr_image(employee_id: str) -> Image.Image:
+    return make_qr_core(employee_id, 900)
+
+
+def text_fit(draw: ImageDraw.ImageDraw, text_value: str, max_width: int, font_path_size: int, bold: bool = False, min_size: int = 28):
+    size = font_path_size
+    while size >= min_size:
+        font = load_font(size, bold)
+        bbox = draw.textbbox((0, 0), text_value, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            return font
+        size -= 2
+    return load_font(min_size, bold)
+
+
+def generate_cell_card_image(emp: dict) -> Image.Image:
+    employee_id = emp["id"]
+    W, H = 1080, 1920
+    azul = (5, 26, 57)
+    azul2 = (11, 42, 85)
+    azul_claro = (227, 239, 255)
+    gris = (244, 247, 251)
+    blanco = (255, 255, 255)
+    oscuro = (24, 32, 42)
+    muted = (92, 104, 120)
+
+    img = Image.new("RGB", (W, H), gris)
+    draw = ImageDraw.Draw(img)
+
+    # Header sobrio en azul. Nada de carnaval naranja, por fin.
+    draw.rectangle((0, 0, W, 390), fill=azul)
+    draw.rectangle((0, 330, W, 390), fill=azul2)
+
+    font_brand = load_font(54, True)
+    font_subtitle = load_font(32, False)
+    font_name = text_fit(draw, emp.get("nombre") or employee_id, W - 180, 72, True, 42)
+    font_label = load_font(32, False)
+    font_id = load_font(50, True)
+    font_small = load_font(28, False)
+    font_tiny = load_font(24, False)
+
+    center_text(draw, (0, 76, W), "ALTIMA", font_brand, blanco)
+    center_text(draw, (0, 150, W), "Código personal de acceso", font_subtitle, (220, 235, 248))
+
+    # Tarjeta principal
+    draw.rounded_rectangle((62, 260, W - 62, H - 116), radius=62, fill=blanco)
+    draw.rounded_rectangle((112, 328, W - 112, 1250), radius=48, fill=(250, 252, 255), outline=azul_claro, width=6)
+
+    qr_img = make_qr_core(employee_id, 760)
+    img.paste(qr_img, ((W - 760) // 2, 410))
+
+    # Nombre + ID
+    center_text(draw, (96, 1310, W - 192), emp.get("nombre") or "Empleado", font_name, oscuro)
+    center_text(draw, (96, 1408, W - 192), employee_id, font_id, azul)
+
+    info_parts = [x for x in [emp.get("area") or "Área no asignada", emp.get("puesto") or "", emp.get("turno") or "Turno no asignado"] if x]
+    info = " · ".join(info_parts)
+    info_font = text_fit(draw, info, W - 200, 34, False, 24)
+    center_text(draw, (100, 1490, W - 200), info, info_font, muted)
+
+    vehicle_text = "CON VEHÍCULO" if emp.get("tiene_vehiculo") else "SIN VEHÍCULO"
+    badge_w, badge_h = 430, 78
+    bx = (W - badge_w) // 2
+    by = 1588
+    draw.rounded_rectangle((bx, by, bx + badge_w, by + badge_h), radius=39, fill=azul)
+    center_text(draw, (bx, by + 20, badge_w), vehicle_text, font_label, blanco)
+
+    center_text(draw, (100, 1740, W - 200), "Muestra esta imagen a vigilancia", font_small, muted)
+    center_text(draw, (100, 1790, W - 200), "El QR contiene únicamente el ID del empleado", font_tiny, (120, 130, 145))
+
+    return img
+
+
+def png_response(img: Image.Image, filename: str, inline: bool = True):
+    output = io.BytesIO()
+    img.save(output, format="PNG")
+    output.seek(0)
+    disposition = "inline" if inline else "attachment"
+    return StreamingResponse(output, media_type="image/png", headers={"Content-Disposition": f"{disposition}; filename={filename}"})
+
+
 @app.get("/qr/{employee_id}.png")
 def qr_png(employee_id: str):
     employee_id = clean_id(employee_id)
@@ -2397,12 +2759,8 @@ def qr_png(employee_id: str):
         emp = get_employee(conn, employee_id)
         if not emp:
             raise HTTPException(status_code=404, detail="Empleado no encontrado")
-    img = qrcode.make(employee_id).convert("RGB")
-    img = img.resize((900, 900))
-    output = io.BytesIO()
-    img.save(output, format="PNG")
-    output.seek(0)
-    return StreamingResponse(output, media_type="image/png", headers={"Content-Disposition": f"inline; filename={employee_id}.png"})
+    filename = f"QR_{employee_file_base(emp)}.png"
+    return png_response(generate_simple_qr_image(employee_id), filename, inline=True)
 
 
 def load_font(size: int, bold: bool = False):
@@ -2430,51 +2788,42 @@ def qr_card_png(employee_id: str):
         emp = get_employee(conn, employee_id)
         if not emp:
             raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    filename = f"CELULAR_{employee_file_base(emp)}.png"
+    return png_response(generate_cell_card_image(emp), filename, inline=True)
 
-    W, H = 1080, 1920
-    azul = (5, 26, 57)
-    verde = (36, 198, 166)
-    gris = (245, 247, 250)
-    blanco = (255, 255, 255)
-    oscuro = (24, 32, 42)
 
-    img = Image.new("RGB", (W, H), gris)
-    draw = ImageDraw.Draw(img)
-    draw.rectangle((0, 0, W, 310), fill=azul)
-    draw.rounded_rectangle((70, 230, W - 70, H - 120), radius=54, fill=blanco)
-
-    font_title = load_font(58, True)
-    font_name = load_font(68, True)
-    font_label = load_font(32, False)
-    font_id = load_font(44, True)
-    font_small = load_font(28, False)
-
-    center_text(draw, (0, 74, W), "CREDENCIAL QR", font_title, blanco)
-    center_text(draw, (0, 150, W), "Control de asistencia", font_label, (220, 235, 245))
-
-    qr_img = qrcode.make(employee_id).convert("RGB").resize((720, 720))
-    img.paste(qr_img, ((W - 720) // 2, 440))
-
-    center_text(draw, (100, 1230, W - 200), emp["nombre"], font_name, oscuro)
-    center_text(draw, (100, 1330, W - 200), employee_id, font_id, azul)
-
-    info = f"{emp['area'] or 'Área no asignada'} · {emp['turno'] or 'Turno no asignado'}"
-    center_text(draw, (100, 1410, W - 200), info, font_label, (80, 90, 105))
-
-    vehicle_text = "Con vehículo" if emp["tiene_vehiculo"] else "Sin vehículo"
-    badge_w, badge_h = 420, 72
-    bx = (W - badge_w) // 2
-    by = 1510
-    draw.rounded_rectangle((bx, by, bx + badge_w, by + badge_h), radius=36, fill=verde)
-    center_text(draw, (bx, by + 17, badge_w), vehicle_text, font_label, azul)
-
-    center_text(draw, (100, 1710, W - 200), "Muestra este QR a vigilancia", font_small, (100, 110, 125))
-    center_text(draw, (100, 1760, W - 200), "El QR contiene únicamente el ID del empleado", font_small, (100, 110, 125))
-
+@app.get("/qr/celular/todos.zip")
+def qr_cell_cards_zip(request: Request):
+    require_admin_http(request)
+    with engine.begin() as conn:
+        employees = fetch_all(conn, "SELECT * FROM employees ORDER BY nombre")
     output = io.BytesIO()
-    img.save(output, format="PNG")
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+        for emp in employees:
+            img = generate_cell_card_image(emp)
+            buff = io.BytesIO()
+            img.save(buff, format="PNG")
+            zf.writestr(f"CELULAR_{employee_file_base(emp)}.png", buff.getvalue())
     output.seek(0)
-    return StreamingResponse(output, media_type="image/png", headers={"Content-Disposition": f"inline; filename=credencial-{employee_id}.png"})
+    filename = f"imagenes_celular_qr_{now_mx().strftime('%Y%m%d_%H%M')}.zip"
+    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+@app.get("/qr/simples/todos.zip")
+def qr_simple_zip(request: Request):
+    require_admin_http(request)
+    with engine.begin() as conn:
+        employees = fetch_all(conn, "SELECT * FROM employees ORDER BY nombre")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+        for emp in employees:
+            img = generate_simple_qr_image(emp["id"])
+            buff = io.BytesIO()
+            img.save(buff, format="PNG")
+            zf.writestr(f"QR_{employee_file_base(emp)}.png", buff.getvalue())
+    output.seek(0)
+    filename = f"qr_simples_{now_mx().strftime('%Y%m%d_%H%M')}.zip"
+    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 # -----------------------------
