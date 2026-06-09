@@ -15,12 +15,14 @@ services:
         value: 3.13.5
       - key: DATA_DIR
         value: /tmp/asistencias_data
-      - key: DEFAULT_ADMIN_USERNAME
-        value: Admin4rd
-      - key: DEFAULT_ADMIN_PASSWORD
-        value: Adm4rd
       - key: SESSION_DAYS
         value: "14"
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: LOGIN_MAX_ATTEMPTS
+        value: "6"
+      - key: LOGIN_LOCK_MINUTES
+        value: "15"
 
 databases:
   - name: asistencias-qr-db

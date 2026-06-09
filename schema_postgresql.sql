@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT DEFAULT 'Admin',
   active INTEGER DEFAULT 1,
   display_name TEXT DEFAULT '',
+  failed_login_attempts INTEGER DEFAULT 0,
+  locked_until TEXT DEFAULT '',
+  last_login_at TEXT DEFAULT '',
+  password_changed_at TEXT DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -123,4 +127,25 @@ CREATE TABLE IF NOT EXISTS system_events (
   message TEXT DEFAULT '',
   detail TEXT DEFAULT '',
   created_at TEXT NOT NULL
+);
+
+-- Vigilantes y cambio de turno por QR
+CREATE TABLE IF NOT EXISTS guards (
+    code TEXT PRIMARY KEY,
+    alias TEXT DEFAULT '',
+    nombre TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    qr_activo INTEGER DEFAULT 1,
+    observaciones TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS active_guard_state (
+    id TEXT PRIMARY KEY,
+    guard_code TEXT NOT NULL,
+    guard_display TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    changed_by TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
 );

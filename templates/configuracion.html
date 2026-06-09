@@ -8,7 +8,10 @@
   <div class="actions">
     <a class="btn secondary" href="/turnos">Turnos</a>
     <a class="btn secondary" href="/usuarios">Usuarios</a>
+    <a class="btn secondary" href="/vigilantes">Vigilantes</a>
     <a class="btn secondary" href="/sistema">Sistema</a>
+    <a class="btn secondary" href="/rh">Vista RH</a>
+    {% set user = get_current_user(request) %}{% if user and user.role == 'Supremo' %}<a class="btn danger" href="/supremo/registros">Limpieza beta</a>{% endif %}
   </div>
 </section>
 
@@ -38,7 +41,7 @@
   <article class="card config-card">
     <h3>Usuarios y roles</h3>
     <p>Admin ve todo. Vigilancia solo escanea y registra. Así nadie convierte el sistema en buffet de permisos.</p>
-    <ul class="clean-list"><li><strong>Admin:</strong> configuración, reportes, correcciones.</li><li><strong>Vigilancia:</strong> solo pantalla QR.</li></ul>
+    <ul class="clean-list"><li><strong>Supremo:</strong> todo + limpieza beta.</li><li><strong>Admin:</strong> configuración, reportes, correcciones.</li><li><strong>RH:</strong> vista sobria de asistencias y retardos.</li><li><strong>Vigilancia:</strong> solo pantalla QR.</li></ul>
     <a class="btn secondary" href="/usuarios">Administrar usuarios</a>
   </article>
 
@@ -53,6 +56,19 @@
     <h3>Reportes</h3>
     <p>Vista semanal acumulada de retardos, faltas operativas, extras y pendientes de revisión.</p>
     <a class="btn secondary" href="/reportes/semanal">Reporte semanal</a>
+  </article>
+
+
+  <article class="card config-card">
+    <h3>Vigilantes por QR</h3>
+    <p>Códigos de cambio de turno. El vigilante activo queda ligado automáticamente a cada registro.</p>
+    <a class="btn secondary" href="/vigilantes">Administrar vigilantes</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Vista RH</h3>
+    <p>Panel sobrio para la jefa de RH: asistencia diaria, retardos y acumulado semanal sin tocar configuración.</p>
+    <a class="btn secondary" href="/rh">Abrir vista RH</a>
   </article>
 
   <article class="card config-card">

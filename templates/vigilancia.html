@@ -10,36 +10,39 @@
       <div class="scan-logo">▣ asistencias</div>
       <div class="scan-actions">
         <button class="icon-btn" type="button" onclick="toggleScanner()" title="Activar cámara">▣</button>
-        <button class="icon-btn" type="button" onclick="toggleManualPanel()" title="ID manual">⌕</button>
+        <button class="icon-btn" type="button" onclick="toggleManualPanel()" title="Código manual">⌕</button>
       </div>
     </div>
 
     <div class="scan-title">Escanear QR</div>
     <div class="scan-frame"><span></span><span></span><span></span><span></span></div>
-    <div id="scannerStatus" class="scanner-status">Usuario: {{ active_user.username if active_user else 'Vigilancia' }} · Cámara lista. También puedes capturar ID manual.</div>
+
+    <div id="activeGuardBox" class="active-guard-box {{ '' if active_guard else 'missing' }}">
+      <small>Vigilante activo</small>
+      <strong id="activeGuardName">{{ active_guard.display if active_guard else 'Escanea QR de vigilante' }}</strong>
+      <span id="activeGuardSince">{{ 'Desde ' ~ short_datetime(active_guard.started_at) if active_guard else 'Requerido antes de registrar empleados' }}</span>
+    </div>
+
+    <div id="scannerStatus" class="scanner-status">Usuario: {{ active_user.username if active_user else 'Vigilancia' }} · Primero escanea QR de vigilante; después QR de empleado.</div>
 
     <div class="quick-actions auto-mode">
       <div class="quick-card active" id="autoMovementCard">
         <small>Siguiente movimiento</small><strong id="autoMovementText">Automático</strong>
       </div>
       <button class="quick-card" type="button" onclick="toggleManualPanel()">
-        <small>Captura</small><strong>ID manual</strong>
+        <small>Captura</small><strong>Código manual</strong>
       </button>
     </div>
   </div>
 
   <aside class="bottom-panel">
     <div class="manual-panel" id="manualPanel">
-      <div class="mini-grid">
-        <label>ID empleado
-          <input id="employeeId" value="" placeholder="Escanea o escribe el ID" autocomplete="off" />
-        </label>
-        <label>Guardia
-          <input id="guardName" value="Vigilancia" />
-        </label>
-      </div>
+      <label>Código QR
+        <input id="employeeId" value="" placeholder="Escanea o escribe código de empleado/vigilante" autocomplete="off" />
+      </label>
       <input type="hidden" id="movementType" value="entrada" />
-      <button class="btn primary full-btn" type="button" onclick="loadEmployee()">Buscar / validar empleado</button>
+      <button class="btn primary full-btn" type="button" onclick="scanCode()">Validar código</button>
+      <p class="muted tiny">Si el código es de vigilante, cambia el responsable activo. Si es de empleado, registra entrada/salida automáticamente.</p>
     </div>
 
     <section id="employeeCard" class="employee-card-pro hidden">
@@ -71,7 +74,7 @@
       <form id="attendanceForm" class="form-stack pro-form">
         <input type="hidden" id="formEmployeeId" name="employee_id" />
         <input type="hidden" id="formMovement" name="movimiento" value="entrada" />
-        <input type="hidden" id="formGuardia" name="guardia" />
+        <input type="hidden" id="formGuardia" name="guardia" value="" />
 
         <label class="check-row compact">
           <input type="checkbox" id="vehicleCheck" name="vehiculo" value="1" />
@@ -114,8 +117,8 @@
     </section>
 
     <section class="last-moves">
-      <div class="section-row"><h3>Accesos rápidos</h3>{% if active_user and active_user.role == 'Admin' %}<a href="/retardos" class="btn small secondary">Retardos</a>{% endif %}</div>
-      <p class="muted tiny">La evidencia de vehículo sigue por WhatsApp. Aquí solo se registra asistencia, turno, retardo, salida temprana y extra.</p>
+      <div class="section-row"><h3>Regla operativa</h3></div>
+      <p class="muted tiny">Vigilancia no decide entrada o salida: el sistema lo determina por registro abierto. Todo queda ligado al vigilante activo.</p>
     </section>
   </aside>
 </section>

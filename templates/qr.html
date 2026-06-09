@@ -3,9 +3,17 @@
 <section class="page-head row-head">
   <div>
     <h2>Módulo de QR</h2>
-    <p>Genera QR simple, imagen de credencial para celular e impresión masiva.</p>
+    <p>Genera QR simple, imagen de celular e impresión masiva. Los archivos salen con nombre completo y número.</p>
   </div>
-  <button class="btn primary" onclick="window.print()">Imprimir QRs</button>
+  <div class="actions">
+    <button class="btn primary" onclick="window.print()">Imprimir QRs</button>
+    <a class="btn secondary" href="/qr/celular/todos.zip">Exportar todas las imágenes celular</a>
+    <a class="btn secondary" href="/qr/simples/todos.zip">Exportar QR simples</a>
+  </div>
+</section>
+
+<section class="alert info no-print">
+  Para imprimir, usa <strong>Imprimir QRs</strong>. Para enviarlos por WhatsApp, descarga <strong>Exportar todas las imágenes celular</strong>; el ZIP incluye un PNG por empleado, nombrado con nombre completo e ID. Si hay muchos empleados, la descarga puede tardar unos segundos. Paciencia, esa tecnología antigua.
 </section>
 
 <section class="qr-grid">

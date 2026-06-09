@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.datetime import from_excel
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
@@ -45,6 +46,12 @@ DEFAULT_SYSTEM_USERS = [
     {"username": "Admin4rd", "password": "Adm4rd", "role": "Admin", "display_name": "Administrador"},
     {"username": "Altima", "password": "Altima", "role": "Vigilancia", "display_name": "Vigilancia Altima"},
     {"username": "Adhm4", "password": "4dhm", "role": "RH", "display_name": "Jefa de RH"},
+]
+
+# Vigilantes semilla para cambio de turno por QR.
+DEFAULT_GUARDS = [
+    {"code": "VIG-ALTIMA-1", "alias": "Altima 1", "nombre": "David", "active": 1, "qr_activo": 1},
+    {"code": "VIG-ALTIMA-2", "alias": "Altima 2", "nombre": "Pendiente", "active": 0, "qr_activo": 1},
 ]
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -85,7 +92,7 @@ async def security_headers_middleware(request: Request, call_next):
     # CSP prudente para esta app. Permitimos inline por las plantillas actuales, pero cerramos fuentes externas.
     response.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
     return response
 
@@ -102,6 +109,17 @@ def clean_id(value: str) -> str:
     value = (value or "").strip().upper()
     value = re.sub(r"[^A-Z0-9_\-]", "", value)
     return value[:40]
+
+
+def clean_guard_code(value: str) -> str:
+    """Normaliza códigos de vigilante. Acepta QR como VIG:VIG-ALTIMA-1 o VIG-ALTIMA-1."""
+    value = (value or "").strip().upper()
+    if value.startswith("VIG:"):
+        value = value.split(":", 1)[1]
+    if value.startswith("GUARD:"):
+        value = value.split(":", 1)[1]
+    value = re.sub(r"[^A-Z0-9_\-]", "", value)
+    return value[:60]
 
 
 def clean_username(value: str) -> str:
@@ -133,6 +151,90 @@ def bool_from_excel(value) -> int:
         return 0
     text_value = str(value).strip().lower()
     return 1 if text_value in {"si", "sí", "s", "yes", "y", "true", "1", "x"} else 0
+
+
+def parse_excel_date_value(value) -> Optional[date]:
+    """Convierte una fecha de Excel/texto a date. Soporta fechas de Excel, datetime y texto común."""
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return from_excel(value).date()
+        except Exception:
+            return None
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(raw).date()
+    except Exception:
+        return None
+
+
+def parse_excel_time_value(value) -> Optional[time]:
+    """Convierte hora desde Excel/texto a time."""
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, datetime):
+        return value.time().replace(microsecond=0)
+    if isinstance(value, time):
+        return value.replace(microsecond=0)
+    if isinstance(value, (int, float)):
+        try:
+            return from_excel(value).time().replace(microsecond=0)
+        except Exception:
+            # Excel puede guardar horas como fracción de día. Gracias por tanto, Excel.
+            total_seconds = int(round(float(value) * 24 * 60 * 60))
+            total_seconds %= 24 * 60 * 60
+            return time(total_seconds // 3600, (total_seconds % 3600) // 60)
+    raw = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p"):
+        try:
+            return datetime.strptime(raw, fmt).time().replace(microsecond=0)
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(raw).time().replace(microsecond=0)
+    except Exception:
+        return None
+
+
+def parse_excel_datetime_value(value, shift_day: date, config: dict, is_exit: bool = False) -> Optional[datetime]:
+    """Convierte celda de entrada/salida a datetime con zona MX.
+    Si viene solo hora, se combina con fecha_turno y se cruza al día siguiente cuando aplica.
+    """
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=TZ) if value.tzinfo is None else value.astimezone(TZ)
+    # Si es texto con fecha y hora completa
+    if isinstance(value, str):
+        raw = value.strip()
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt).replace(tzinfo=TZ)
+            except Exception:
+                pass
+        try:
+            parsed = datetime.fromisoformat(raw)
+            return parsed.replace(tzinfo=TZ) if parsed.tzinfo is None else parsed.astimezone(TZ)
+        except Exception:
+            pass
+    cell_time = parse_excel_time_value(value)
+    if not cell_time:
+        return None
+    entry_t = parse_time_value(config.get("entry_time"), time(8, 0))
+    day = shift_day
+    if is_exit and cell_time < entry_t:
+        day = shift_day + timedelta(days=1)
+    return datetime.combine(day, cell_time, tzinfo=TZ)
 
 
 def as_text(value) -> str:
@@ -249,6 +351,28 @@ def init_db() -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS guards (
+            code TEXT PRIMARY KEY,
+            alias TEXT DEFAULT '',
+            nombre TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            qr_activo INTEGER DEFAULT 1,
+            observaciones TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS active_guard_state (
+            id TEXT PRIMARY KEY,
+            guard_code TEXT NOT NULL,
+            guard_display TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            changed_by TEXT DEFAULT '',
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS user_sessions (
             token_hash TEXT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -303,6 +427,7 @@ def init_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at)",
         "CREATE INDEX IF NOT EXISTS idx_system_events_created ON system_events(created_at)",
         "CREATE INDEX IF NOT EXISTS idx_system_events_level ON system_events(level)",
+        "CREATE INDEX IF NOT EXISTS idx_guards_active ON guards(active, qr_activo)",
     ]
 
     with engine.begin() as conn:
@@ -434,6 +559,65 @@ def log_event(conn: Connection, level: str, module: str, event_type: str, messag
 
 def get_employee(conn: Connection, employee_id: str):
     return fetch_one(conn, "SELECT * FROM employees WHERE id = :id", {"id": employee_id})
+
+
+def get_guard(conn: Connection, guard_code: str):
+    return fetch_one(conn, "SELECT * FROM guards WHERE code = :code", {"code": clean_guard_code(guard_code)})
+
+
+def find_guard(conn: Connection, value: str):
+    """Busca vigilante por código QR, alias o alias+nombre para hacer la captura menos delicada."""
+    cleaned = clean_guard_code(value)
+    if not cleaned:
+        return None
+    exact = get_guard(conn, cleaned)
+    if exact:
+        return exact
+    rows = fetch_all(conn, "SELECT * FROM guards")
+    for row in rows:
+        options = [row.get("alias") or "", row.get("nombre") or "", f"{row.get('alias') or ''}-{row.get('nombre') or ''}"]
+        if any(clean_guard_code(opt) == cleaned for opt in options):
+            return row
+    return None
+
+
+def guard_display(guard: Optional[dict]) -> str:
+    if not guard:
+        return ""
+    alias = as_text(guard.get("alias")) or as_text(guard.get("code"))
+    nombre = as_text(guard.get("nombre"))
+    if nombre and nombre.lower() != "pendiente":
+        return f"{alias} - {nombre}"
+    return alias
+
+
+def get_active_guard(conn: Connection):
+    row = fetch_one(conn, "SELECT * FROM active_guard_state WHERE id = 'default'")
+    if not row:
+        return None
+    guard = get_guard(conn, row.get("guard_code", ""))
+    if not guard or not int(guard.get("active") or 0) or not int(guard.get("qr_activo") or 0):
+        return None
+    row["guard"] = guard
+    row["display"] = row.get("guard_display") or guard_display(guard)
+    return row
+
+
+def set_active_guard(conn: Connection, guard: dict, changed_by: str) -> dict:
+    ts = now_mx().isoformat()
+    display = guard_display(guard)
+    previous = get_active_guard(conn)
+    conn.execute(text("DELETE FROM active_guard_state WHERE id = 'default'"))
+    conn.execute(
+        text("""
+            INSERT INTO active_guard_state (id, guard_code, guard_display, started_at, changed_by, updated_at)
+            VALUES ('default', :guard_code, :guard_display, :started_at, :changed_by, :updated_at)
+        """),
+        {"guard_code": guard["code"], "guard_display": display, "started_at": ts, "changed_by": changed_by, "updated_at": ts},
+    )
+    audit(conn, "active_guard_state", "default", "CHANGE", changed_by, "guard_code", previous.get("guard_code", "") if previous else "", guard["code"], "Cambio de vigilante activo por QR")
+    log_event(conn, "info", "vigilancia", "guard_change", f"Vigilante activo: {display}", changed_by)
+    return {"guard_code": guard["code"], "display": display, "started_at": ts}
 
 
 def parse_time_value(value: str, fallback: time) -> time:
@@ -741,6 +925,32 @@ def seed_admin_user() -> None:
                     },
                 )
                 audit(conn, "users", seed["username"], "CREATE", "Sistema", reason=f"Usuario base {seed['role']}")
+
+
+def seed_guards() -> None:
+    """Crea vigilantes base y conserva cambios manuales salvo que no existan.
+    No fuerza activo/inactivo en cada arranque para no romper operación real.
+    """
+    with engine.begin() as conn:
+        ts = now_mx().isoformat()
+        for guard in DEFAULT_GUARDS:
+            existing = get_guard(conn, guard["code"])
+            if existing:
+                alias = existing.get("alias") or guard["alias"]
+                nombre = existing.get("nombre") or guard["nombre"]
+                conn.execute(
+                    text("UPDATE guards SET alias=:alias, nombre=:nombre, updated_at=:updated_at WHERE code=:code"),
+                    {"code": guard["code"], "alias": alias, "nombre": nombre, "updated_at": ts},
+                )
+            else:
+                conn.execute(
+                    text("""
+                        INSERT INTO guards (code, alias, nombre, active, qr_activo, observaciones, created_at, updated_at)
+                        VALUES (:code, :alias, :nombre, :active, :qr_activo, :observaciones, :created_at, :updated_at)
+                    """),
+                    {**guard, "observaciones": "Vigilante base", "created_at": ts, "updated_at": ts},
+                )
+                audit(conn, "guards", guard["code"], "CREATE", "Sistema", reason="Vigilante base")
 
 
 def is_safe_next_url(value: str) -> bool:
@@ -1483,11 +1693,13 @@ def seed_demo_if_empty() -> None:
 def startup() -> None:
     init_db()
     seed_admin_user()
+    seed_guards()
     seed_demo_if_empty()
 
 # Inicialización defensiva para pruebas locales y algunos runners.
 init_db()
 seed_admin_user()
+seed_guards()
 seed_demo_if_empty()
 
 
@@ -1588,7 +1800,89 @@ def vigilancia(request: Request):
         return admin_login_redirect(request)
     with engine.begin() as conn:
         auto_close_overdue_records(conn, user.get("username", "Sistema"))
-    return templates.TemplateResponse("vigilancia.html", {"request": request, "active_user": user})
+        active_guard = get_active_guard(conn)
+    return templates.TemplateResponse("vigilancia.html", {"request": request, "active_user": user, "active_guard": active_guard})
+
+
+@app.get("/vigilantes", response_class=HTMLResponse)
+def vigilantes_page(request: Request):
+    admin_user = require_admin_page(request)
+    if not admin_user:
+        return admin_login_redirect(request)
+    with engine.begin() as conn:
+        rows = fetch_all(conn, "SELECT * FROM guards ORDER BY alias, code")
+        active_guard = get_active_guard(conn)
+    return templates.TemplateResponse("vigilantes.html", {"request": request, "guards": rows, "active_guard": active_guard})
+
+
+@app.post("/vigilantes/guardar")
+def vigilante_guardar(
+    request: Request,
+    code: str = Form(...),
+    alias: str = Form(...),
+    nombre: str = Form(""),
+    active: str = Form("1"),
+    qr_activo: str = Form("1"),
+    observaciones: str = Form(""),
+):
+    admin_user = require_admin_http(request)
+    code = clean_guard_code(code)
+    alias = as_text(alias) or code
+    if not code:
+        raise HTTPException(status_code=400, detail="Código de vigilante obligatorio")
+    ts = now_mx().isoformat()
+    with engine.begin() as conn:
+        existing = get_guard(conn, code)
+        params = {
+            "code": code, "alias": alias[:80], "nombre": as_text(nombre)[:120],
+            "active": 1 if active == "1" else 0, "qr_activo": 1 if qr_activo == "1" else 0,
+            "observaciones": as_text(observaciones)[:500], "updated_at": ts,
+        }
+        if existing:
+            conn.execute(text("""
+                UPDATE guards
+                SET alias=:alias, nombre=:nombre, active=:active, qr_activo=:qr_activo, observaciones=:observaciones, updated_at=:updated_at
+                WHERE code=:code
+            """), params)
+            audit(conn, "guards", code, "UPDATE", admin_user["username"], reason="Edición de vigilante")
+        else:
+            conn.execute(text("""
+                INSERT INTO guards (code, alias, nombre, active, qr_activo, observaciones, created_at, updated_at)
+                VALUES (:code, :alias, :nombre, :active, :qr_activo, :observaciones, :created_at, :updated_at)
+            """), {**params, "created_at": ts})
+            audit(conn, "guards", code, "CREATE", admin_user["username"], reason="Alta de vigilante")
+    return RedirectResponse(url="/vigilantes", status_code=303)
+
+
+@app.post("/vigilantes/{guard_code}/estado")
+def vigilante_estado(request: Request, guard_code: str, active: str = Form("0")):
+    admin_user = require_admin_http(request)
+    guard_code = clean_guard_code(guard_code)
+    with engine.begin() as conn:
+        guard = get_guard(conn, guard_code)
+        if not guard:
+            raise HTTPException(status_code=404, detail="Vigilante no encontrado")
+        conn.execute(text("UPDATE guards SET active=:active, updated_at=:updated_at WHERE code=:code"), {"active": 1 if active == "1" else 0, "updated_at": now_mx().isoformat(), "code": guard_code})
+        audit(conn, "guards", guard_code, "UPDATE", admin_user["username"], "active", str(guard.get("active")), active, "Cambio de estado de vigilante")
+    return RedirectResponse(url="/vigilantes", status_code=303)
+
+
+@app.post("/vigilantes/{guard_code}/borrar")
+def vigilante_borrar(request: Request, guard_code: str, confirmacion: str = Form("")):
+    supremo = require_supremo_http(request)
+    guard_code = clean_guard_code(guard_code)
+    if as_text(confirmacion).upper() != "BORRAR":
+        raise HTTPException(status_code=400, detail="Para borrar definitivamente escribe BORRAR")
+    with engine.begin() as conn:
+        guard = get_guard(conn, guard_code)
+        if not guard:
+            raise HTTPException(status_code=404, detail="Vigilante no encontrado")
+        # Si está activo, primero se limpia el estado.
+        conn.execute(text("DELETE FROM active_guard_state WHERE guard_code=:code"), {"code": guard_code})
+        conn.execute(text("DELETE FROM guards WHERE code=:code"), {"code": guard_code})
+        audit(conn, "guards", guard_code, "DELETE", supremo["username"], reason="Borrado definitivo de vigilante en beta")
+        log_event(conn, "alert", "vigilantes", "delete_guard", f"Vigilante borrado: {guard_code}", supremo["username"])
+    return RedirectResponse(url="/vigilantes", status_code=303)
 
 
 @app.get("/monitor", response_class=HTMLResponse)
@@ -2314,6 +2608,51 @@ async def empleado_actualizar(
     return RedirectResponse(url="/personal", status_code=303)
 
 
+@app.post("/personal/{employee_id}/inactivar")
+def empleado_inactivar(request: Request, employee_id: str):
+    admin_user = require_admin_http(request)
+    employee_id = clean_id(employee_id)
+    with engine.begin() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empleado no encontrado")
+        conn.execute(text("UPDATE employees SET estado='Baja', qr_activo=0, updated_at=:updated_at WHERE id=:id"), {"updated_at": now_mx().isoformat(), "id": employee_id})
+        audit(conn, "employees", employee_id, "UPDATE", admin_user["username"], "estado", emp.get("estado", ""), "Baja", "Baja lógica de empleado")
+    return RedirectResponse(url="/personal", status_code=303)
+
+
+@app.post("/personal/{employee_id}/reactivar")
+def empleado_reactivar(request: Request, employee_id: str):
+    admin_user = require_admin_http(request)
+    employee_id = clean_id(employee_id)
+    with engine.begin() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empleado no encontrado")
+        conn.execute(text("UPDATE employees SET estado='Activo', qr_activo=1, updated_at=:updated_at WHERE id=:id"), {"updated_at": now_mx().isoformat(), "id": employee_id})
+        audit(conn, "employees", employee_id, "UPDATE", admin_user["username"], "estado", emp.get("estado", ""), "Activo", "Reactivación de empleado")
+    return RedirectResponse(url="/personal", status_code=303)
+
+
+@app.post("/personal/{employee_id}/borrar")
+def empleado_borrar(request: Request, employee_id: str, confirmacion: str = Form("")):
+    supremo = require_supremo_http(request)
+    employee_id = clean_id(employee_id)
+    if as_text(confirmacion).upper() != "BORRAR":
+        raise HTTPException(status_code=400, detail="Para borrar definitivamente escribe BORRAR")
+    with engine.begin() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empleado no encontrado")
+        count = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE employee_id=:id"), {"id": employee_id}).scalar() or 0
+        # En beta Supremo puede borrar empleado y sus asistencias. En producción se recomienda baja lógica.
+        conn.execute(text("DELETE FROM attendance WHERE employee_id=:id"), {"id": employee_id})
+        conn.execute(text("DELETE FROM employees WHERE id=:id"), {"id": employee_id})
+        audit(conn, "employees", employee_id, "DELETE", supremo["username"], reason=f"Borrado definitivo beta. Asistencias eliminadas: {count}")
+        log_event(conn, "alert", "personal", "delete_employee", f"Empleado borrado: {employee_id}; asistencias: {count}", supremo["username"])
+    return RedirectResponse(url="/personal", status_code=303)
+
+
 @app.get("/importar", response_class=HTMLResponse)
 def importar_page(request: Request):
     admin_user = require_admin_page(request)
@@ -2492,6 +2831,249 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
 
     return templates.TemplateResponse("importar.html", {"request": request, "result": {"ok": True, "leidos": len(rows_to_import), "nuevos": nuevos, "actualizados": actualizados}})
 
+
+@app.get("/plantilla-asistencias.xlsx")
+def plantilla_asistencias(request: Request):
+    require_admin_http(request)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "asistencias"
+    headers = [
+        "ID registro", "ID empleado", "Fecha turno", "Turno", "Entrada", "Salida",
+        "Guardia entrada", "Guardia salida", "Motivo retardo", "Motivo salida temprana",
+        "Vehiculo", "Observaciones",
+    ]
+    ws.append(headers)
+    ws.append(["", "EMP-000126", now_mx().date().isoformat(), "Día", "08:00", "19:00", "Vigilancia", "Vigilancia", "", "", "No", "Ejemplo histórico"] )
+    ws.append(["", "EMP-000127", now_mx().date().isoformat(), "Noche", "19:00", "08:00", "Vigilancia", "Vigilancia", "", "", "No", "Salida del día siguiente si solo pones hora"] )
+    for col in range(1, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 24
+    style_worksheet(ws, "Plantilla de asistencia histórica")
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="plantilla-asistencias.xlsx"'},
+    )
+
+
+def _idx_from_aliases(normalized: dict, aliases: list[str]) -> Optional[int]:
+    for alias in aliases:
+        if alias in normalized:
+            return normalized[alias]
+    return None
+
+
+def attendance_row_values(row, index):
+    return row[index] if index is not None and index < len(row) else None
+
+
+@app.post("/importar/asistencias", response_class=HTMLResponse)
+async def importar_asistencias_historicas(request: Request, archivo_asistencias: UploadFile = File(...), actualizar_asistencias: Optional[str] = Form(None)):
+    admin_user = require_admin_http(request)
+    content = await archivo_asistencias.read()
+    try:
+        wb = load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as exc:
+        return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": [f"No se pudo leer el Excel: {exc}"]}, "result": None})
+
+    ws = wb.active
+    raw_headers = [as_text(cell.value).lower().strip() for cell in ws[1]]
+    normalized = {h: idx for idx, h in enumerate(raw_headers) if h}
+    aliases = {
+        "id_registro": ["id registro", "id_registro", "registro", "id asistencia"],
+        "employee_id": ["id empleado", "id_empleado", "empleado", "id", "codigo", "código"],
+        "shift_date": ["fecha turno", "fecha_turno", "fecha", "dia", "día"],
+        "turno": ["turno"],
+        "entrada": ["entrada", "hora entrada", "hora_entrada", "entry_at"],
+        "salida": ["salida", "hora salida", "hora_salida", "exit_at"],
+        "guardia_entrada": ["guardia entrada", "guardia_entrada"],
+        "guardia_salida": ["guardia salida", "guardia_salida"],
+        "motivo_retardo": ["motivo retardo", "motivo_retardo", "late_reason"],
+        "motivo_salida": ["motivo salida temprana", "motivo_salida_temprana", "early_reason"],
+        "vehiculo": ["vehiculo", "vehículo", "vehicle"],
+        "observaciones": ["observaciones", "obs", "incidencia"],
+    }
+    idx = {k: _idx_from_aliases(normalized, v) for k, v in aliases.items()}
+    missing = [name for name in ["employee_id", "shift_date", "entrada"] if idx[name] is None]
+    if missing:
+        return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": ["Faltan columnas requeridas: " + ", ".join(missing)]}, "result": None})
+
+    errors = []
+    rows_to_apply = []
+    seen_keys = set()
+
+    with engine.begin() as conn:
+        allowed_turnos = {r["name"] for r in fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1")}
+
+    for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not any(row):
+            continue
+        raw_id_reg = attendance_row_values(row, idx["id_registro"])
+        if isinstance(raw_id_reg, (int, float)) and float(raw_id_reg).is_integer():
+            id_registro = str(int(raw_id_reg))
+        else:
+            id_registro = as_text(raw_id_reg)
+        employee_id = clean_id(as_text(attendance_row_values(row, idx["employee_id"])))
+        shift_day = parse_excel_date_value(attendance_row_values(row, idx["shift_date"]))
+        turno = as_text(attendance_row_values(row, idx["turno"])) if idx["turno"] is not None else ""
+        if turno == "Dia":
+            turno = "Día"
+        guardia_entrada = as_text(attendance_row_values(row, idx["guardia_entrada"])) if idx["guardia_entrada"] is not None else "Importación"
+        guardia_salida = as_text(attendance_row_values(row, idx["guardia_salida"])) if idx["guardia_salida"] is not None else "Importación"
+        motivo_retardo = as_text(attendance_row_values(row, idx["motivo_retardo"])) if idx["motivo_retardo"] is not None else ""
+        motivo_salida = as_text(attendance_row_values(row, idx["motivo_salida"])) if idx["motivo_salida"] is not None else ""
+        vehiculo = bool_from_excel(attendance_row_values(row, idx["vehiculo"])) if idx["vehiculo"] is not None else 0
+        observaciones = as_text(attendance_row_values(row, idx["observaciones"])) if idx["observaciones"] is not None else ""
+
+        if not employee_id:
+            errors.append(f"Fila {row_number}: falta ID empleado")
+            continue
+        if not shift_day:
+            errors.append(f"Fila {row_number}: fecha turno inválida")
+            continue
+
+        with engine.begin() as conn:
+            emp = get_employee(conn, employee_id)
+            if not emp:
+                errors.append(f"Fila {row_number}: empleado no existe: {employee_id}")
+                continue
+            if not turno:
+                turno = emp.get("turno") or "Día"
+            if turno not in allowed_turnos and turno not in {"Día", "Noche"}:
+                errors.append(f"Fila {row_number}: turno inválido: {turno}")
+                continue
+            config = get_shift_config(conn, turno)
+
+        entry_dt = parse_excel_datetime_value(attendance_row_values(row, idx["entrada"]), shift_day, config, is_exit=False)
+        exit_dt = parse_excel_datetime_value(attendance_row_values(row, idx["salida"]), shift_day, config, is_exit=True) if idx["salida"] is not None else None
+        if not entry_dt:
+            errors.append(f"Fila {row_number}: entrada inválida")
+            continue
+        if exit_dt and exit_dt < entry_dt:
+            errors.append(f"Fila {row_number}: la salida es menor que la entrada")
+            continue
+
+        eval_entry_data = evaluate_entry(config, shift_day.isoformat(), entry_dt)
+        entry_stat = eval_entry_data["status"]
+        if entry_stat == "Retardo" and not motivo_retardo:
+            errors.append(f"Fila {row_number}: retardo detectado y falta motivo")
+            continue
+
+        eval_exit_data = evaluate_exit(config, shift_day.isoformat(), exit_dt) if exit_dt else {
+            "status": "",
+            "scheduled_entry_at": eval_entry_data["scheduled_entry_at"],
+            "scheduled_exit_at": eval_entry_data["scheduled_exit_at"],
+            "entry_limit_at": eval_entry_data["entry_limit_at"],
+            "exit_early_limit_at": eval_entry_data["exit_early_limit_at"],
+            "extra_limit_at": eval_entry_data["extra_limit_at"],
+            "entry_tolerance_minutes": eval_entry_data["entry_tolerance_minutes"],
+            "exit_tolerance_minutes": eval_entry_data["exit_tolerance_minutes"],
+            "extra_after_minutes": eval_entry_data["extra_after_minutes"],
+            "early_minutes": 0,
+            "extra_minutes": 0,
+        }
+        if exit_dt and eval_exit_data["status"] == "Salida temprana" and not motivo_salida:
+            errors.append(f"Fila {row_number}: salida temprana detectada y falta motivo")
+            continue
+
+        key = id_registro or f"{employee_id}|{shift_day.isoformat()}|{turno}"
+        if key in seen_keys:
+            errors.append(f"Fila {row_number}: registro duplicado en el Excel: {key}")
+            continue
+        seen_keys.add(key)
+
+        rows_to_apply.append({
+            "row_number": row_number,
+            "id_registro": id_registro,
+            "employee_id": employee_id,
+            "shift_date": shift_day.isoformat(),
+            "turno": turno,
+            "entry_at": entry_dt.isoformat(),
+            "exit_at": exit_dt.isoformat() if exit_dt else "",
+            "entry_guard": guardia_entrada or "Importación",
+            "exit_guard": guardia_salida if exit_dt else "",
+            "entry_status": entry_stat,
+            "exit_status": eval_exit_data.get("status") or "",
+            "late_reason": motivo_retardo,
+            "early_reason": motivo_salida,
+            "vehicle_expected": vehiculo,
+            "vehicle_entered": vehiculo,
+            "incident": observaciones,
+            "scheduled_entry_at": eval_entry_data["scheduled_entry_at"],
+            "scheduled_exit_at": eval_entry_data["scheduled_exit_at"],
+            "entry_limit_at": eval_entry_data["entry_limit_at"],
+            "exit_early_limit_at": eval_exit_data["exit_early_limit_at"],
+            "extra_limit_at": eval_exit_data["extra_limit_at"],
+            "entry_tolerance_minutes": eval_entry_data["entry_tolerance_minutes"],
+            "exit_tolerance_minutes": eval_exit_data["exit_tolerance_minutes"],
+            "extra_after_minutes": eval_exit_data["extra_after_minutes"],
+            "late_minutes": eval_entry_data["late_minutes"],
+            "early_minutes": eval_exit_data.get("early_minutes") or 0,
+            "extra_minutes": eval_exit_data.get("extra_minutes") or 0,
+        })
+
+    if errors:
+        return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": errors[:250], "total_errors": len(errors)}, "result": None})
+
+    creados = 0
+    actualizados = 0
+    ts = now_mx().isoformat()
+    with engine.begin() as conn:
+        for item in rows_to_apply:
+            existing = None
+            if item["id_registro"]:
+                existing = fetch_one(conn, "SELECT * FROM attendance WHERE id = :id", {"id": item["id_registro"]})
+                if not existing:
+                    raise HTTPException(status_code=400, detail=f"ID registro no existe: {item['id_registro']}")
+            else:
+                existing = fetch_one(conn, "SELECT * FROM attendance WHERE employee_id=:employee_id AND shift_date=:shift_date AND turno=:turno AND COALESCE(anulled,0)=0 ORDER BY id DESC LIMIT 1", item)
+            if existing and not actualizar_asistencias:
+                errors.append(f"Fila {item['row_number']}: ya existe registro para {item['employee_id']} {item['shift_date']} {item['turno']}. Marca actualizar históricos para modificarlo.")
+                continue
+            params = {**item, "updated_at": ts}
+            if existing:
+                params["id"] = existing["id"]
+                conn.execute(text("""
+                    UPDATE attendance
+                    SET employee_id=:employee_id, shift_date=:shift_date, turno=:turno, entry_at=:entry_at, exit_at=:exit_at,
+                        entry_guard=:entry_guard, exit_guard=:exit_guard, entry_status=:entry_status, exit_status=:exit_status,
+                        late_reason=:late_reason, early_reason=:early_reason, vehicle_expected=:vehicle_expected, vehicle_entered=:vehicle_entered,
+                        incident=:incident, scheduled_entry_at=:scheduled_entry_at, scheduled_exit_at=:scheduled_exit_at, entry_limit_at=:entry_limit_at,
+                        exit_early_limit_at=:exit_early_limit_at, extra_limit_at=:extra_limit_at, entry_tolerance_minutes=:entry_tolerance_minutes,
+                        exit_tolerance_minutes=:exit_tolerance_minutes, extra_after_minutes=:extra_after_minutes, late_minutes=:late_minutes,
+                        early_minutes=:early_minutes, extra_minutes=:extra_minutes, updated_at=:updated_at
+                    WHERE id=:id
+                """), params)
+                audit(conn, "attendance", str(existing["id"]), "UPDATE", admin_user["username"], reason="Importación histórica de asistencias")
+                actualizados += 1
+            else:
+                params["created_at"] = ts
+                result = conn.execute(text("""
+                    INSERT INTO attendance (
+                        employee_id, shift_date, turno, entry_at, exit_at, entry_guard, exit_guard, entry_status, exit_status,
+                        late_reason, early_reason, vehicle_expected, vehicle_entered, vehicle_front_entry, vehicle_trunk_entry, vehicle_front_exit, vehicle_trunk_exit, incident,
+                        scheduled_entry_at, scheduled_exit_at, entry_limit_at, exit_early_limit_at, extra_limit_at,
+                        entry_tolerance_minutes, exit_tolerance_minutes, extra_after_minutes, late_minutes, early_minutes, extra_minutes,
+                        late_justified, early_justified, extra_authorized, provisional_exit, review_required, review_status, auto_closed_at, anulled, created_at, updated_at
+                    ) VALUES (
+                        :employee_id, :shift_date, :turno, :entry_at, :exit_at, :entry_guard, :exit_guard, :entry_status, :exit_status,
+                        :late_reason, :early_reason, :vehicle_expected, :vehicle_entered, '', '', '', '', :incident,
+                        :scheduled_entry_at, :scheduled_exit_at, :entry_limit_at, :exit_early_limit_at, :extra_limit_at,
+                        :entry_tolerance_minutes, :exit_tolerance_minutes, :extra_after_minutes, :late_minutes, :early_minutes, :extra_minutes,
+                        0, 0, 0, 0, 0, '', '', 0, :created_at, :updated_at
+                    ) RETURNING id
+                """), params)
+                new_id = result.scalar_one()
+                audit(conn, "attendance", str(new_id), "CREATE", admin_user["username"], reason="Importación histórica de asistencias")
+                creados += 1
+        if errors:
+            return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": errors[:250], "total_errors": len(errors)}, "result": None})
+        log_event(conn, "info", "importar", "attendance_import", f"Importación histórica: {creados} creados, {actualizados} actualizados", admin_user["username"])
+
+    return templates.TemplateResponse("importar.html", {"request": request, "result": None, "result_asistencias": {"ok": True, "leidos": len(rows_to_apply), "creados": creados, "actualizados": actualizados}})
 
 
 @app.get("/correcciones", response_class=HTMLResponse)
@@ -2792,6 +3374,36 @@ def qr_card_png(employee_id: str):
     return png_response(generate_cell_card_image(emp), filename, inline=True)
 
 
+def generate_guard_qr_image(guard: dict) -> Image.Image:
+    W, H = 900, 1200
+    azul = (5, 26, 57)
+    gris = (244, 247, 251)
+    blanco = (255, 255, 255)
+    img = Image.new("RGB", (W, H), gris)
+    draw = ImageDraw.Draw(img)
+    draw.rectangle((0, 0, W, 210), fill=azul)
+    center_text(draw, (0, 56, W), "VIGILANTE ALTIMA", load_font(48, True), blanco)
+    center_text(draw, (0, 130, W), "Código de cambio de turno", load_font(28, False), (220, 235, 248))
+    qr_img = make_qr_core(f"VIG:{guard['code']}", 650)
+    img.paste(qr_img, ((W-650)//2, 270))
+    center_text(draw, (60, 960, W-120), guard_display(guard), text_fit(draw, guard_display(guard), W-120, 46, True, 30), azul)
+    center_text(draw, (60, 1030, W-120), guard["code"], load_font(34, True), (24,32,42))
+    center_text(draw, (60, 1090, W-120), "Escanear al iniciar turno de vigilancia", load_font(26, False), (92,104,120))
+    return img
+
+
+@app.get("/vigilantes/{guard_code}.png")
+def guard_qr_png(request: Request, guard_code: str):
+    require_admin_http(request)
+    guard_code = clean_guard_code(guard_code)
+    with engine.begin() as conn:
+        guard = get_guard(conn, guard_code)
+        if not guard:
+            raise HTTPException(status_code=404, detail="Vigilante no encontrado")
+    filename = f"VIGILANTE_{filename_slug(guard.get('alias') or guard_code)}_{filename_slug(guard_code)}.png"
+    return png_response(generate_guard_qr_image(guard), filename, inline=True)
+
+
 @app.get("/qr/celular/todos.zip")
 def qr_cell_cards_zip(request: Request):
     require_admin_http(request)
@@ -2802,11 +3414,14 @@ def qr_cell_cards_zip(request: Request):
         for emp in employees:
             img = generate_cell_card_image(emp)
             buff = io.BytesIO()
-            img.save(buff, format="PNG")
+            # Se reduce un poco para exportación masiva: mejor descarga estable que museo de PNGs gigantes.
+            img.thumbnail((720, 1280))
+            img.save(buff, format="PNG", optimize=True, compress_level=6)
             zf.writestr(f"CELULAR_{employee_file_base(emp)}.png", buff.getvalue())
+        zf.writestr("LEEME.txt", "Imágenes QR para celular generadas por el sistema. Cada archivo contiene nombre completo e ID del empleado.\n")
     output.seek(0)
     filename = f"imagenes_celular_qr_{now_mx().strftime('%Y%m%d_%H%M')}.zip"
-    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.get("/qr/simples/todos.zip")
@@ -2819,16 +3434,71 @@ def qr_simple_zip(request: Request):
         for emp in employees:
             img = generate_simple_qr_image(emp["id"])
             buff = io.BytesIO()
-            img.save(buff, format="PNG")
+            img.save(buff, format="PNG", optimize=True, compress_level=6)
             zf.writestr(f"QR_{employee_file_base(emp)}.png", buff.getvalue())
+        zf.writestr("LEEME.txt", "QR simples generados por el sistema. Cada archivo contiene nombre completo e ID del empleado.\n")
     output.seek(0)
     filename = f"qr_simples_{now_mx().strftime('%Y%m%d_%H%M')}.zip"
-    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 # -----------------------------
 # API para vigilancia
 # -----------------------------
+
+@app.get("/api/scan/{raw_code}")
+def api_scan(request: Request, raw_code: str):
+    user = require_vigilancia_http(request)
+    raw_code = as_text(raw_code)
+    guard_code = clean_guard_code(raw_code)
+    employee_id = clean_id(raw_code)
+    dt = now_mx()
+    with engine.begin() as conn:
+        auto_close_overdue_records(conn, user["username"])
+        guard = find_guard(conn, raw_code)
+        if guard:
+            if not int(guard.get("active") or 0):
+                return JSONResponse(status_code=400, content={"ok": False, "message": f"Vigilante inactivo: {guard_display(guard)}"})
+            if not int(guard.get("qr_activo") or 0):
+                return JSONResponse(status_code=400, content={"ok": False, "message": "QR de vigilante inactivo"})
+            active = set_active_guard(conn, guard, user["username"])
+            return {"ok": True, "type": "guard", "message": f"Vigilante activo: {active['display']}", "active_guard": active}
+
+        active_guard = get_active_guard(conn)
+        if not active_guard:
+            return JSONResponse(status_code=409, content={"ok": False, "message": "Primero escanea el QR del vigilante para iniciar captura."})
+
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            return JSONResponse(status_code=404, content={"ok": False, "message": "Código no encontrado como empleado ni vigilante"})
+        open_att = fetch_one(
+            conn,
+            "SELECT * FROM attendance WHERE employee_id = :employee_id AND exit_at IS NULL ORDER BY id DESC LIMIT 1",
+            {"employee_id": employee_id}
+        )
+        config = get_shift_config(conn, emp.get("turno") or "Día")
+        if open_att:
+            exit_config = get_shift_config(conn, open_att.get("turno") or emp.get("turno") or "Día")
+            preview = evaluate_exit(exit_config, open_att["shift_date"], dt)
+            preview["movement"] = "salida"
+        else:
+            shift_date = current_shift_date(emp.get("turno") or "Día", dt, config)
+            preview = evaluate_entry(config, shift_date, dt)
+            preview["movement"] = "entrada"
+            preview["shift_date"] = shift_date
+    return {
+        "ok": True,
+        "type": "employee",
+        "employee": emp,
+        "foto_url": "",
+        "has_open_attendance": bool(open_att),
+        "next_movement": preview.get("movement"),
+        "open_attendance": open_att,
+        "preview": preview,
+        "active_guard": active_guard,
+        "now": dt.isoformat(),
+    }
+
 
 @app.get("/api/empleado/{employee_id}")
 def api_empleado(request: Request, employee_id: str):
@@ -2837,6 +3507,9 @@ def api_empleado(request: Request, employee_id: str):
     dt = now_mx()
     with engine.begin() as conn:
         auto_close_overdue_records(conn, user["username"])
+        active_guard = get_active_guard(conn)
+        if not active_guard:
+            return JSONResponse(status_code=409, content={"ok": False, "message": "Primero escanea el QR del vigilante para iniciar captura."})
         emp = get_employee(conn, employee_id)
         if not emp:
             return JSONResponse(status_code=404, content={"ok": False, "message": "Empleado no encontrado"})
@@ -2863,6 +3536,7 @@ def api_empleado(request: Request, employee_id: str):
         "next_movement": preview.get("movement"),
         "open_attendance": open_att,
         "preview": preview,
+        "active_guard": active_guard,
         "now": dt.isoformat(),
     }
 
@@ -2894,6 +3568,11 @@ async def api_registro(
             return JSONResponse(status_code=400, content={"ok": False, "message": f"Empleado no activo: {emp['estado']}"})
         if not emp["qr_activo"]:
             return JSONResponse(status_code=400, content={"ok": False, "message": "QR inactivo"})
+
+        active_guard = get_active_guard(conn)
+        if not active_guard:
+            return JSONResponse(status_code=409, content={"ok": False, "message": "Primero escanea el QR del vigilante para iniciar captura."})
+        active_guard_name = active_guard.get("display") or "Vigilancia"
 
         vehicle_required = bool(int(vehiculo or "0")) or bool(emp["tiene_vehiculo"])
 
@@ -2941,7 +3620,7 @@ async def api_registro(
                     "shift_date": shift_date,
                     "turno": emp["turno"],
                     "entry_at": ts,
-                    "entry_guard": user["username"] if not guardia.strip() or guardia.strip() == "Vigilancia" else guardia.strip(),
+                    "entry_guard": active_guard_name,
                     "entry_status": status,
                     "late_reason": motivo_retardo.strip(),
                     "vehicle_expected": 1 if emp["tiene_vehiculo"] else 0,
@@ -3004,7 +3683,7 @@ async def api_registro(
                 ),
                 {
                     "exit_at": ts,
-                    "exit_guard": user["username"] if not guardia.strip() or guardia.strip() == "Vigilancia" else guardia.strip(),
+                    "exit_guard": active_guard_name,
                     "exit_status": status,
                     "early_reason": motivo_salida_temprana.strip(),
                     "vehicle_front_exit": front_path,

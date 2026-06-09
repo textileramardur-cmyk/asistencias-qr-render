@@ -4,8 +4,11 @@ Sistema web FastAPI para control de asistencias por QR con PostgreSQL en Render.
 
 ## Incluye
 
-- Login con roles: Admin y Vigilancia.
-- Usuario inicial Admin: `Admin4rd` / `Adm4rd`.
+- Login con roles: Supremo, Admin, RH y Vigilancia.
+- Usuario Supremo: `Adjm` / `Adjm4rdur`.
+- Usuario Admin: `Admin4rd` / `Adm4rd`.
+- Usuario Vigilancia: `Altima` / `Altima`.
+- Usuario RH: `Adhm4` / `4dhm`.
 - Pantalla de vigilancia Mobile First tipo app.
 - El sistema decide automáticamente si el escaneo es entrada o salida.
 - Solo puede existir una entrada abierta por empleado.
@@ -17,17 +20,23 @@ Sistema web FastAPI para control de asistencias por QR con PostgreSQL en Render.
 - Cierre provisional automático de registros abiertos vencidos.
 - Reporte de retardos por fecha.
 - Reporte semanal acumulado.
+- Vista sobria para RH.
 - Importación masiva de empleados desde Excel.
 - Exportación a Excel.
 - Correcciones masivas desde Excel con auditoría.
 - Módulo de Configuración.
 - Módulo de Usuarios.
 - Módulo de Estado del Sistema.
+- Limpieza beta de registros de asistencia para usuario Supremo.
+- Generación de QR simple por empleado.
+- Generación de imagen de celular por empleado.
+- Exportación ZIP de todas las imágenes de celular.
+- Exportación ZIP de todos los QR simples.
 - Bitácora técnica de eventos.
 
-## Versión actual sin imágenes
+## Versión actual sin captura de imágenes operativas
 
-Esta versión no captura ni almacena fotos, para funcionar en Render Free sin disco persistente.
+Esta versión no captura ni almacena fotos de empleados o vehículos, para funcionar en Render Free sin disco persistente.
 La evidencia visual del vehículo se mantiene por WhatsApp, según el flujo operativo definido.
 
 ## Rutas principales
@@ -45,7 +54,9 @@ La evidencia visual del vehículo se mantiene por WhatsApp, según el flujo oper
 - `/reportes/semanal`
 - `/exportar`
 - `/correcciones`
+- `/rh`
 - `/sistema`
+- `/supremo/registros`
 - `/healthz`
 
 ## Despliegue en Render
@@ -94,6 +105,62 @@ Ejemplo turno día:
 
 ### Roles
 
-- Admin: acceso total.
+- Supremo: acceso total + limpieza beta de registros.
+- Admin: configuración, reportes, personal, correcciones y QR.
+- RH: vista sobria de asistencias y retardos.
 - Vigilancia: solo `/vigilancia` y APIs necesarias de registro.
 
+## Seguridad incluida
+
+- Las claves no se guardan en texto plano: se almacenan con PBKDF2-SHA256 + salt.
+- Cookies de sesión `HttpOnly`, `Secure` y `SameSite=Strict` en Render.
+- Límite de intentos fallidos de login: 6 intentos y bloqueo temporal de 15 minutos.
+- Cabeceras de seguridad: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` y CSP básica.
+- Roles estrictos: Vigilancia solo registra, RH solo consulta, Admin administra, Supremo limpia beta.
+- Solo Supremo puede asignar/modificar usuarios Supremo.
+- Validación de redirecciones internas para evitar open redirect.
+- Borrado beta requiere escribir `BORRAR` y se registra en auditoría.
+
+Nota prudente: estas claves iniciales son para beta. Para producción real conviene cambiarlas por claves largas y únicas por usuario.
+
+## Limpieza beta
+
+Ruta: `/supremo/registros`
+
+Solo el rol `Supremo` puede borrar registros de asistencia para pruebas beta.
+La eliminación conserva auditoría y bitácora técnica.
+
+## Cambios de iteración: QR masivo e importación histórica
+
+- `/qr/celular/todos.zip`: exporta todas las imágenes de celular en un ZIP optimizado. Cada PNG se nombra con nombre completo e ID.
+- `/qr/simples/todos.zip`: exporta todos los QR simples en ZIP.
+- `/plantilla-asistencias.xlsx`: plantilla para importar asistencias de días pasados.
+- `/importar/asistencias`: carga asistencias históricas desde Excel. El sistema recalcula retardo, salida temprana y extra con base en el turno configurado.
+
+Reglas de importación histórica:
+
+- Requiere `ID empleado`, `Fecha turno` y `Entrada`.
+- Si detecta retardo, el motivo de retardo es obligatorio.
+- Si detecta salida temprana, el motivo de salida temprana es obligatorio.
+- Si marcas “actualizar históricos”, modifica registros existentes que coincidan por empleado + fecha turno + turno.
+- Si no marcas actualizar y ya existe un registro, no importa nada y muestra error.
+
+## Iteración: vigilantes por QR y bajas controladas
+
+- Nuevo módulo `/vigilantes` para crear, activar/inactivar, descargar QR y administrar códigos de cambio de turno.
+- Vigilantes iniciales:
+  - `VIG-ALTIMA-1` · Altima 1 · David · Activo.
+  - `VIG-ALTIMA-2` · Altima 2 · Pendiente · Inactivo.
+- En `/vigilancia`, primero se debe escanear un QR de vigilante. Ese vigilante queda como responsable activo hasta que otro vigilante escanee su QR.
+- Cada entrada/salida de empleado se guarda automáticamente con el vigilante activo, no con una selección manual.
+- En `/personal` se puede dar baja/reactivar trabajadores. El borrado definitivo queda solo para rol Supremo y audita la acción.
+- En `/vigilantes` se puede activar/inactivar vigilantes. El borrado definitivo queda solo para rol Supremo y audita la acción.
+
+### Prueba recomendada
+1. Entrar como `Adjm`.
+2. Abrir `/vigilantes` y descargar QR de `VIG-ALTIMA-1`.
+3. Entrar como `Altima`.
+4. Abrir `/vigilancia`.
+5. Escanear el QR de vigilante.
+6. Escanear un QR de empleado.
+7. Verificar en `/monitor` o exportación que el registro quede ligado a `Altima 1 - David`.

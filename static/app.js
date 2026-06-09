@@ -82,21 +82,52 @@ async function parseJsonResponse(res) {
   return await res.json();
 }
 
-async function loadEmployee() {
-  const employeeId = byId('employeeId').value.trim();
+function updateActiveGuardBox(activeGuard) {
+  const box = byId('activeGuardBox');
+  const name = byId('activeGuardName');
+  const since = byId('activeGuardSince');
+  if (!box || !name || !since || !activeGuard) return;
+  box.classList.remove('missing');
+  name.innerText = activeGuard.display || activeGuard.guard_display || 'Vigilante activo';
+  since.innerText = activeGuard.started_at ? `Desde ${fmtDateTime(activeGuard.started_at)}` : 'Turno de vigilancia activo';
+}
+
+async function scanCode() {
+  const code = byId('employeeId').value.trim();
   const resultBox = byId('resultBox');
   if (resultBox) hide(resultBox);
-  if (!employeeId) return;
+  if (!code) return;
 
-  const res = await fetch(`/api/empleado/${encodeURIComponent(employeeId)}`);
+  const res = await fetch(`/api/scan/${encodeURIComponent(code)}`);
   const data = await parseJsonResponse(res);
   if (!data.ok) {
-    alert(data.message || 'Empleado no encontrado');
+    alert(data.message || 'Código no válido');
     return;
   }
 
+  if (data.type === 'guard') {
+    updateActiveGuardBox(data.active_guard);
+    const status = byId('scannerStatus');
+    if (status) status.innerText = data.message || 'Vigilante activo actualizado';
+    byId('employeeId').value = '';
+    currentEmployee = null;
+    currentPreview = null;
+    hide(byId('employeeCard'));
+    return;
+  }
+
+  paintEmployeeData(data);
+}
+
+async function loadEmployee() {
+  // Compatibilidad con botones viejos: ahora cualquier código pasa por el scanner inteligente.
+  return scanCode();
+}
+
+function paintEmployeeData(data) {
   currentEmployee = data.employee;
   currentPreview = data.preview;
+  if (data.active_guard) updateActiveGuardBox(data.active_guard);
   setMovement(data.next_movement || currentPreview?.movement || 'entrada', false);
 
   show(byId('employeeCard'));
@@ -107,7 +138,6 @@ async function loadEmployee() {
   byId('empVehicle').innerText = currentEmployee.tiene_vehiculo ? 'Sí' : 'No';
   byId('empOpen').innerText = data.has_open_attendance ? 'Sí' : 'No';
   byId('formEmployeeId').value = currentEmployee.id;
-  byId('formGuardia').value = byId('guardName').value || 'Vigilancia';
 
   const status = byId('empStatus');
   status.innerText = currentEmployee.estado;
@@ -116,17 +146,15 @@ async function loadEmployee() {
   const vehicleCheck = byId('vehicleCheck');
   if (vehicleCheck) vehicleCheck.checked = Boolean(currentEmployee.tiene_vehiculo);
 
-  // El movimiento lo decide el sistema: entrada si no hay registro abierto; salida si ya hay entrada abierta.
   paintEvaluation(currentPreview);
-
   byId('employeeCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
 
 async function submitAttendance(event) {
   event.preventDefault();
   const form = event.target;
   byId('formMovement').value = currentMovement;
-  byId('formGuardia').value = byId('guardName').value || 'Vigilancia';
 
   if (currentPreview?.status === 'Retardo' && !byId('lateReason').value) {
     alert('Hay retardo. El motivo es obligatorio. Triste, pero razonable.');
@@ -151,7 +179,6 @@ async function submitAttendance(event) {
 
   if (data.ok) {
     form.reset();
-    byId('guardName').value = 'Vigilancia';
     byId('employeeId').value = '';
     currentEmployee = null;
     currentPreview = null;
@@ -184,7 +211,7 @@ async function toggleScanner() {
       (decodedText) => {
         byId('employeeId').value = decodedText.trim();
         if (status) status.innerText = `QR leído: ${decodedText.trim()}`;
-        loadEmployee();
+        scanCode();
         scanner.stop();
         scannerRunning = false;
       }

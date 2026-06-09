@@ -432,3 +432,34 @@ th { color: var(--azul); background: #f8fafc; }
 .alert-card.bad { border: 1px solid #ffc3c3; background: #fff2f2; }
 .actions select { min-width: 160px; }
 .nav-user { color: #eaf2ff; font-weight: 800; padding: 8px 10px; }
+.btn.danger { background: var(--rojo); color: white; }
+.alert.ok { background: #ddf7ef; color: #08785f; }
+.danger-zone { border: 1px solid #ffd1d1; background: #fffafa; }
+.sober-head h2 { letter-spacing: -.02em; }
+.inline-filter { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.inline-filter label { margin: 0; min-width: 190px; }
+.inline-filter input { margin-top: 6px; }
+
+/* Vigilantes / responsable activo */
+.active-guard-box {
+  position: absolute;
+  top: 92px;
+  left: 18px;
+  right: 18px;
+  z-index: 5;
+  background: rgba(255,255,255,.94);
+  color: var(--azul);
+  border-radius: 18px;
+  padding: 12px 14px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.16);
+}
+.active-guard-box small { display:block; color:#667085; font-size:12px; }
+.active-guard-box strong { display:block; font-size:17px; }
+.active-guard-box span { display:block; color:#667085; font-size:12px; margin-top:2px; }
+.active-guard-box.missing { border: 2px solid #f2b84b; }
+.inline-form { display:inline; margin:0 4px; }
+.link-btn { border:0; background:transparent; color:var(--azul); font-weight:700; cursor:pointer; padding:0; text-decoration:underline; font-size:14px; }
+.danger-link { color:#b42318; }
+.wide-actions { min-width: 260px; }
+.grid-form { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap:12px; align-items:end; }
+.form-actions { display:flex; align-items:end; }

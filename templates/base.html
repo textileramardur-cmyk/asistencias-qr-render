@@ -16,6 +16,8 @@
     <nav class="nav">
       {% if user and user.role == 'Vigilancia' %}
         <a href="/vigilancia">Vigilancia</a>
+      {% elif user and user.role == 'RH' %}
+        <a href="/rh">RH</a>
       {% else %}
         <a href="/vigilancia">Vigilancia</a>
         <a href="/monitor">Monitor</a>
@@ -25,11 +27,14 @@
         <a href="/turnos">Turnos</a>
         <a href="/personal">Personal</a>
         <a href="/usuarios">Usuarios</a>
+        <a href="/vigilantes">Vigilantes</a>
         <a href="/importar">Importar</a>
         <a href="/qr">QR</a>
         <a href="/exportar">Exportar</a>
         <a href="/correcciones">Correcciones</a>
         <a href="/sistema">Sistema</a>
+        <a href="/rh">RH</a>
+        {% if user and user.role == 'Supremo' %}<a href="/supremo/registros">Beta</a>{% endif %}
       {% endif %}
       {% if user %}
         <span class="nav-user">{{ user.username }} · {{ user.role }}</span>

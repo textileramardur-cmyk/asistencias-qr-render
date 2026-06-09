@@ -2,8 +2,8 @@
 {% block content %}
 <section class="login-wrap">
   <form class="card login-card" action="/login" method="post">
-    <h2>Acceso administrador</h2>
-    <p class="muted">Ingresa con el usuario Admin para administrar personal, QR, reportes y exportaciones.</p>
+    <h2>Acceso al sistema</h2>
+    <p class="muted">Ingresa con tu usuario según rol: Supremo, Admin, RH o Vigilancia.</p>
 
     {% if error %}
     <div class="result error">{{ error }}</div>
@@ -12,16 +12,16 @@
     <input type="hidden" name="next" value="{{ next or '/monitor' }}" />
 
     <label>Usuario
-      <input name="username" autocomplete="username" value="Admin4rd" required />
+      <input name="username" autocomplete="username" value="" placeholder="Usuario" required />
     </label>
 
     <label>Clave
-      <input type="password" name="password" autocomplete="current-password" required />
+      <input type="password" name="password" autocomplete="current-password" placeholder="Clave" required />
     </label>
 
     <button class="btn primary" type="submit">Entrar</button>
 
-    <p class="muted login-note">Usuario inicial: <strong>Admin4rd</strong>. Cámbialo después para producción, porque la seguridad no debería vivir eternamente en una nota pegada al monitor.</p>
+    <p class="muted login-note">Accesos base configurados: Supremo <strong>Adjm</strong>, Admin <strong>Admin4rd</strong>, Vigilancia <strong>Altima</strong>, RH <strong>Adhm4</strong>. Las claves se guardan cifradas/hasheadas en la base.</p>
   </form>
 </section>
 {% endblock %}
