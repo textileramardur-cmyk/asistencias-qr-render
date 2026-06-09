@@ -6,9 +6,70 @@
   <title>{{ title or 'Control QR Asistencias' }}</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
-<body>
-  {% set user = get_current_user(request) %}
-  <header class="topbar">
+{% set user = get_current_user(request) %}
+{% set path = request.url.path %}
+{% set page_key = (path.strip('/') or 'inicio').replace('/', '-') %}
+{% set show_desktop_shell = user and path != '/vigilancia' and path != '/login' and user.role != 'Vigilancia' %}
+<body class="page-{{ page_key }} {{ 'with-desktop-shell' if show_desktop_shell else 'simple-shell' }} role-{{ user.role|lower if user else 'public' }}">
+
+  {% macro nav_link(href, label, icon='') -%}
+    <a class="nav-link {{ 'active' if path == href or (href != '/' and path.startswith(href ~ '/')) else '' }}" href="{{ href }}">
+      {% if icon %}<span class="nav-ico">{{ icon }}</span>{% endif %}<span>{{ label }}</span>
+    </a>
+  {%- endmacro %}
+
+  {% if show_desktop_shell %}
+  <aside class="desktop-sidebar">
+    <div class="brand-block">
+      <div class="brand-mark">A</div>
+      <div>
+        <strong>ALTIMA</strong>
+        <small>Control de asistencias</small>
+      </div>
+    </div>
+
+    <nav class="side-nav">
+      {% if user.role == 'RH' %}
+        {{ nav_link('/rh', 'Panel RH', '◎') }}
+      {% else %}
+        {{ nav_link('/monitor', 'Dashboard', '◈') }}
+        {{ nav_link('/retardos', 'Retardos', '◷') }}
+        {{ nav_link('/reportes/semanal', 'Semanal', '▦') }}
+        {{ nav_link('/rh', 'Vista RH', '○') }}
+        <div class="side-label">Operación</div>
+        {{ nav_link('/vigilancia', 'Vigilancia', '▣') }}
+        {{ nav_link('/personal', 'Personal', '☉') }}
+        {{ nav_link('/vigilantes', 'Vigilantes', '◆') }}
+        {{ nav_link('/qr', 'QR', '▧') }}
+        <div class="side-label">Administración</div>
+        {{ nav_link('/configuracion', 'Configuración', '⚙') }}
+        {{ nav_link('/turnos', 'Turnos', '◴') }}
+        {{ nav_link('/usuarios', 'Usuarios', '♙') }}
+        {{ nav_link('/importar', 'Importar', '↥') }}
+        {{ nav_link('/exportar', 'Exportar', '↧') }}
+        {{ nav_link('/correcciones', 'Correcciones', '✎') }}
+        {{ nav_link('/sistema', 'Sistema', '✦') }}
+        {% if user.role == 'Supremo' %}
+          {{ nav_link('/supremo/registros', 'Beta limpieza', '⚠') }}
+        {% endif %}
+      {% endif %}
+    </nav>
+  </aside>
+
+  <header class="desktop-header">
+    <div>
+      <strong>{{ title or 'Control QR Asistencias' }}</strong>
+      <small>PostgreSQL · Render · Operación diaria</small>
+    </div>
+    <div class="header-actions">
+      <a class="status-pill" href="/sistema">Sistema</a>
+      <span class="user-pill">{{ user.username }} · {{ user.role }}</span>
+      <a class="logout-pill" href="/logout">Salir</a>
+    </div>
+  </header>
+  {% endif %}
+
+  <header class="topbar mobile-header">
     <div>
       <h1>Control QR Asistencias</h1>
       <p>Entradas, salidas, retardos, extras y QRs</p>
@@ -18,23 +79,15 @@
         <a href="/vigilancia">Vigilancia</a>
       {% elif user and user.role == 'RH' %}
         <a href="/rh">RH</a>
-      {% else %}
-        <a href="/vigilancia">Vigilancia</a>
-        <a href="/monitor">Monitor</a>
+      {% elif user %}
+        <a href="/monitor">Dashboard</a>
         <a href="/retardos">Retardos</a>
         <a href="/reportes/semanal">Semanal</a>
-        <a href="/configuracion">Configuración</a>
-        <a href="/turnos">Turnos</a>
+        <a href="/configuracion">Config.</a>
         <a href="/personal">Personal</a>
-        <a href="/usuarios">Usuarios</a>
         <a href="/vigilantes">Vigilantes</a>
-        <a href="/importar">Importar</a>
         <a href="/qr">QR</a>
         <a href="/exportar">Exportar</a>
-        <a href="/correcciones">Correcciones</a>
-        <a href="/sistema">Sistema</a>
-        <a href="/rh">RH</a>
-        {% if user and user.role == 'Supremo' %}<a href="/supremo/registros">Beta</a>{% endif %}
       {% endif %}
       {% if user %}
         <span class="nav-user">{{ user.username }} · {{ user.role }}</span>
@@ -45,7 +98,7 @@
     </nav>
   </header>
 
-  <main class="container">
+  <main class="container content-area">
     {% block content %}{% endblock %}
   </main>
 

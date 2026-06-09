@@ -164,3 +164,17 @@ Reglas de importación histórica:
 5. Escanear el QR de vigilante.
 6. Escanear un QR de empleado.
 7. Verificar en `/monitor` o exportación que el registro quede ligado a `Altima 1 - David`.
+
+## Iteración visual PC profesional
+
+Esta versión mejora la experiencia de escritorio sin cambiar la lógica principal:
+
+- Menú lateral profesional para roles Admin/Supremo/RH.
+- Encabezado superior con usuario, rol y acceso al estado del sistema.
+- Dashboard de monitoreo más ejecutivo.
+- Tarjetas KPI más legibles.
+- Tablas con mejor espaciado, badges y jerarquía visual.
+- Módulos administrativos más sobrios en PC.
+- Se conserva la experiencia Mobile First en `/vigilancia`.
+
+La vigilancia sigue siendo simple: escanear QR de vigilante, luego QR de empleado. La administración en PC ahora se ve como sistema interno serio, no como app móvil inflada con aire triste.

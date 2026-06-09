@@ -1,54 +1,82 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="page-head row-head">
+<section class="page-head row-head dashboard-head">
   <div>
-    <h2>Monitoreo</h2>
-    <p>Vista para escritorio y móvil: quién está dentro, retardos, extras e incidencias.</p>
+    <h2>Dashboard operativo</h2>
+    <p>Panorama ejecutivo de asistencia: presentes, retardos, extras, personal dentro e incidencias recientes.</p>
   </div>
   <div class="actions">
-    <a class="btn secondary" href="/retardos">Ver retardos</a>
-    <a class="btn secondary" href="/exportar">Exportar Excel</a>
+    <a class="btn secondary" href="/retardos">Analizar retardos</a>
+    <a class="btn secondary" href="/reportes/semanal">Reporte semanal</a>
+    <a class="btn primary" href="/exportar">Exportar Excel</a>
   </div>
 </section>
 
-<div class="kpi-grid">
-  <div class="kpi"><small>Empleados activos</small><strong>{{ total_employees }}</strong></div>
-  <div class="kpi"><small>Entradas hoy</small><strong>{{ present_today }}</strong></div>
-  <div class="kpi"><small>Retardos hoy</small><strong>{{ late_today }}</strong></div>
-  <div class="kpi"><small>Extras hoy</small><strong>{{ extra_today }}</strong></div>
+<div class="kpi-grid dashboard-kpis">
+  <div class="kpi"><small>Empleados activos</small><strong>{{ total_employees }}</strong><span class="kpi-note">Plantilla disponible</span></div>
+  <div class="kpi"><small>Entradas hoy</small><strong>{{ present_today }}</strong><span class="kpi-note">Registros del día</span></div>
+  <div class="kpi"><small>Retardos hoy</small><strong>{{ late_today }}</strong><span class="kpi-note">Según tolerancia</span></div>
+  <div class="kpi"><small>Extras hoy</small><strong>{{ extra_today }}</strong><span class="kpi-note">Salida + regla configurada</span></div>
 </div>
+
+<section class="dashboard-grid">
+  <article class="card dashboard-main-card">
+    <div class="section-row">
+      <div>
+        <h3>Personas dentro de planta</h3>
+        <p class="muted tiny">Registros abiertos activos. Útil para operación, seguridad y cierre de turno.</p>
+      </div>
+      <a class="btn small secondary" href="/monitor">Actualizar</a>
+    </div>
+    <div class="table-wrap clean-table">
+      <table>
+        <thead>
+          <tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Vehículo</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+          {% for row in inside %}
+          <tr>
+            <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
+            <td>{{ row.area }}</td>
+            <td>{{ row.turno }}</td>
+            <td>{{ short_datetime(row.entry_at) if row.entry_at else '-' }}</td>
+            <td>{{ 'Sí' if row.vehicle_entered else 'No' }}</td>
+            <td><span class="badge ok">Dentro</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6">No hay personal con entrada abierta.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <aside class="dashboard-side-stack">
+    <article class="card mini-panel">
+      <h3>Accesos rápidos</h3>
+      <div class="stacked-links">
+        <a href="/vigilancia">▣ Abrir vigilancia</a>
+        <a href="/vigilantes">◆ Vigilantes activos</a>
+        <a href="/turnos">◴ Turnos y tolerancias</a>
+        <a href="/sistema">✦ Estado del sistema</a>
+      </div>
+    </article>
+    <article class="card mini-panel tone-blue">
+      <h3>Regla operativa</h3>
+      <p>Vigilancia escanea. El sistema decide entrada/salida. Admin corrige. RH consulta.</p>
+    </article>
+  </aside>
+</section>
 
 <section class="card">
   <div class="section-row">
-    <h3>Personas dentro de planta</h3>
-    <a class="btn small secondary" href="/monitor">Actualizar</a>
+    <div>
+      <h3>Incidencias recientes</h3>
+      <p class="muted tiny">Retardos, extras, salidas tempranas y pendientes detectados automáticamente.</p>
+    </div>
+    <a class="btn small secondary" href="/retardos">Ver detalle</a>
   </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Vehículo</th><th>Estado</th></tr>
-      </thead>
-      <tbody>
-        {% for row in inside %}
-        <tr>
-          <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
-          <td>{{ row.area }}</td>
-          <td>{{ row.turno }}</td>
-          <td>{{ short_datetime(row.entry_at) if row.entry_at else '-' }}</td>
-          <td>{{ 'Sí' if row.vehicle_entered else 'No' }}</td>
-          <td><span class="badge ok">Dentro</span></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6">No hay personal con entrada abierta.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-
-<section class="card">
-  <h3>Incidencias recientes</h3>
-  <div class="table-wrap">
+  <div class="table-wrap clean-table">
     <table>
       <thead>
         <tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Min retardo</th><th>Min extra</th><th>Motivo</th></tr>
