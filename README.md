@@ -6,7 +6,8 @@ Sistema web FastAPI para control de asistencias por QR con PostgreSQL en Render.
 
 - Login con roles: Supremo, Admin, RH y Vigilancia.
 - Usuario Supremo: `Adjm` / `Adjm4rdur`.
-- Usuario Admin: `Admin4rd` / `Adm4rd`.
+- Usuario Supremo adicional: `Admin4rd` / `Adm4rd`.
+- Usuario Admin4rd: `Admin4rd` / `Adm4rd` con rol `Supremo`.
 - Usuario Vigilancia: `Altima` / `Altima`.
 - Usuario RH: `Adhm4` / `4dhm`.
 - Pantalla de vigilancia Mobile First tipo app.
@@ -178,3 +179,12 @@ Esta versión mejora la experiencia de escritorio sin cambiar la lógica princip
 - Se conserva la experiencia Mobile First en `/vigilancia`.
 
 La vigilancia sigue siendo simple: escanear QR de vigilante, luego QR de empleado. La administración en PC ahora se ve como sistema interno serio, no como app móvil inflada con aire triste.
+
+## Última mejora: captura móvil y gafetes
+
+- URL dedicada para vigilancia: `/captura`.
+- La pantalla de captura móvil fue rediseñada para uso en celular: cámara protagonista, vigilante activo visible, botones grandes y paleta azul.
+- El módulo `/qr` ahora permite exportar imágenes tipo celular y gafetes físicos.
+- Gafetes individuales: `/qr/gafete/ID_EMPLEADO.png`.
+- Exportación masiva de gafetes de 10 cm x 6 cm: `/qr/gafetes/todos.zip`.
+- Los gafetes se generan como PNG a 300 dpi, con nombre completo e ID del empleado en el nombre del archivo.

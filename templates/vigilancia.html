@@ -1,59 +1,69 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="kigo-shell">
-  <div class="scan-hero">
-    <video id="qrVideo" class="camera-bg" playsinline muted></video>
-    <div id="reader" class="qr-reader-kigo"></div>
-    <div class="camera-dim"></div>
+<section class="capture-app">
+  <div class="capture-hero">
+    <div id="reader" class="capture-reader"></div>
+    <div class="capture-gradient"></div>
 
-    <div class="scan-top">
-      <div class="scan-logo">▣ asistencias</div>
-      <div class="scan-actions">
-        <button class="icon-btn" type="button" onclick="toggleScanner()" title="Activar cámara">▣</button>
-        <button class="icon-btn" type="button" onclick="toggleManualPanel()" title="Código manual">⌕</button>
+    <header class="capture-topbar">
+      <div>
+        <span class="capture-brand">ALTIMA</span>
+        <strong>Captura de acceso</strong>
+      </div>
+      <a class="capture-exit" href="/logout">Salir</a>
+    </header>
+
+    <div id="activeGuardBox" class="capture-guard {{ '' if active_guard else 'missing' }}">
+      <span class="guard-dot"></span>
+      <div>
+        <small>Vigilante activo</small>
+        <strong id="activeGuardName">{{ active_guard.display if active_guard else 'Escanea QR de vigilante' }}</strong>
+        <span id="activeGuardSince">{{ 'Desde ' ~ short_datetime(active_guard.started_at) if active_guard else 'Necesario para registrar empleados' }}</span>
       </div>
     </div>
 
-    <div class="scan-title">Escanear QR</div>
-    <div class="scan-frame"><span></span><span></span><span></span><span></span></div>
-
-    <div id="activeGuardBox" class="active-guard-box {{ '' if active_guard else 'missing' }}">
-      <small>Vigilante activo</small>
-      <strong id="activeGuardName">{{ active_guard.display if active_guard else 'Escanea QR de vigilante' }}</strong>
-      <span id="activeGuardSince">{{ 'Desde ' ~ short_datetime(active_guard.started_at) if active_guard else 'Requerido antes de registrar empleados' }}</span>
+    <div class="capture-center">
+      <p>Centra el código dentro del marco</p>
+      <div class="capture-frame"><span></span><span></span><span></span><span></span></div>
+      <h1>Escanear QR</h1>
     </div>
 
-    <div id="scannerStatus" class="scanner-status">Usuario: {{ active_user.username if active_user else 'Vigilancia' }} · Primero escanea QR de vigilante; después QR de empleado.</div>
+    <div id="scannerStatus" class="capture-status">{{ active_user.username if active_user else 'Vigilancia' }} · escanea vigilante y después empleado.</div>
 
-    <div class="quick-actions auto-mode">
-      <div class="quick-card active" id="autoMovementCard">
-        <small>Siguiente movimiento</small><strong id="autoMovementText">Automático</strong>
-      </div>
-      <button class="quick-card" type="button" onclick="toggleManualPanel()">
-        <small>Captura</small><strong>Código manual</strong>
+    <div class="capture-actions">
+      <button class="capture-action primary" type="button" onclick="toggleScanner()">
+        <span>▣</span><strong>Activar cámara</strong>
+      </button>
+      <button class="capture-action" type="button" onclick="toggleManualPanel()">
+        <span>⌕</span><strong>ID manual</strong>
       </button>
     </div>
   </div>
 
-  <aside class="bottom-panel">
-    <div class="manual-panel" id="manualPanel">
-      <label>Código QR
-        <input id="employeeId" value="" placeholder="Escanea o escribe código de empleado/vigilante" autocomplete="off" />
+  <aside class="capture-panel">
+    <div class="capture-card manual-panel" id="manualPanel">
+      <div class="mini-title">
+        <span>01</span>
+        <div><strong>Código manual</strong><small>Empleado o vigilante</small></div>
+      </div>
+      <label class="clean-label">Código QR
+        <input id="employeeId" value="" placeholder="Escanea o escribe el código" autocomplete="off" inputmode="text" />
       </label>
       <input type="hidden" id="movementType" value="entrada" />
       <button class="btn primary full-btn" type="button" onclick="scanCode()">Validar código</button>
-      <p class="muted tiny">Si el código es de vigilante, cambia el responsable activo. Si es de empleado, registra entrada/salida automáticamente.</p>
+      <p class="muted tiny">El sistema identifica si el QR es de vigilante o empleado. Entrada/salida se decide automáticamente.</p>
     </div>
 
-    <section id="employeeCard" class="employee-card-pro hidden">
-      <div class="employee-card-head">
+    <section id="employeeCard" class="capture-card employee-card-pro hidden">
+      <div class="employee-card-head mobile-pro">
         <div class="avatar-clean">👤</div>
         <div>
+          <small class="eyebrow">Empleado detectado</small>
           <h2 id="empName">Empleado</h2>
           <p id="empMeta">Área · Puesto</p>
           <div class="chip-row">
             <span id="empStatus" class="badge ok">Activo</span>
-            <span id="movementChip" class="badge neutral">Entrada</span>
+            <span id="movementChip" class="badge neutral">Automático</span>
           </div>
         </div>
       </div>
@@ -64,7 +74,7 @@
         <p id="evalDetail">Turno y tolerancia configurables.</p>
       </div>
 
-      <div class="data-strip">
+      <div class="data-strip capture-data-strip">
         <div><small>ID</small><strong id="empId">-</strong></div>
         <div><small>Turno</small><strong id="empTurno">-</strong></div>
         <div><small>Vehículo</small><strong id="empVehicle">-</strong></div>
@@ -116,9 +126,9 @@
       </form>
     </section>
 
-    <section class="last-moves">
-      <div class="section-row"><h3>Regla operativa</h3></div>
-      <p class="muted tiny">Vigilancia no decide entrada o salida: el sistema lo determina por registro abierto. Todo queda ligado al vigilante activo.</p>
+    <section class="capture-card compact-help">
+      <strong>Regla operativa</strong>
+      <p>El vigilante solo escanea. El sistema decide entrada o salida y liga el movimiento al vigilante activo.</p>
     </section>
   </aside>
 </section>

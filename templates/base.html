@@ -9,8 +9,10 @@
 {% set user = get_current_user(request) %}
 {% set path = request.url.path %}
 {% set page_key = (path.strip('/') or 'inicio').replace('/', '-') %}
-{% set show_desktop_shell = user and path != '/vigilancia' and path != '/login' and user.role != 'Vigilancia' %}
-<body class="page-{{ page_key }} {{ 'with-desktop-shell' if show_desktop_shell else 'simple-shell' }} role-{{ user.role|lower if user else 'public' }}">
+{% set capture_paths = ['/vigilancia', '/captura'] %}
+{% set is_capture = path in capture_paths %}
+{% set show_desktop_shell = user and (not is_capture) and path != '/login' and user.role != 'Vigilancia' %}
+<body class="page-{{ page_key }} {{ 'capture-mode' if is_capture else '' }} {{ 'with-desktop-shell' if show_desktop_shell else 'simple-shell' }} role-{{ user.role|lower if user else 'public' }}">
 
   {% macro nav_link(href, label, icon='') -%}
     <a class="nav-link {{ 'active' if path == href or (href != '/' and path.startswith(href ~ '/')) else '' }}" href="{{ href }}">
@@ -69,6 +71,7 @@
   </header>
   {% endif %}
 
+  {% if not is_capture %}
   <header class="topbar mobile-header">
     <div>
       <h1>Control QR Asistencias</h1>
@@ -76,7 +79,7 @@
     </div>
     <nav class="nav">
       {% if user and user.role == 'Vigilancia' %}
-        <a href="/vigilancia">Vigilancia</a>
+        <a href="/captura">Captura</a>
       {% elif user and user.role == 'RH' %}
         <a href="/rh">RH</a>
       {% elif user %}
@@ -97,6 +100,7 @@
       {% endif %}
     </nav>
   </header>
+  {% endif %}
 
   <main class="container content-area">
     {% block content %}{% endblock %}

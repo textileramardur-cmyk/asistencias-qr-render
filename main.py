@@ -43,7 +43,7 @@ LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
 # Usuarios semilla solicitados para beta. Se guardan con hash, no en texto plano en la base.
 DEFAULT_SYSTEM_USERS = [
     {"username": "Adjm", "password": "Adjm4rdur", "role": "Supremo", "display_name": "Usuario Supremo"},
-    {"username": "Admin4rd", "password": "Adm4rd", "role": "Admin", "display_name": "Administrador"},
+    {"username": "Admin4rd", "password": "Adm4rd", "role": "Supremo", "display_name": "Administrador Supremo"},
     {"username": "Altima", "password": "Altima", "role": "Vigilancia", "display_name": "Vigilancia Altima"},
     {"username": "Adhm4", "password": "4dhm", "role": "RH", "display_name": "Jefa de RH"},
 ]
@@ -1749,7 +1749,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
     role = user.get("role")
     if not is_safe_next_url(next) or (next == "/monitor" and role in {"Vigilancia", "RH"}):
         if role == "Vigilancia":
-            safe_next = "/vigilancia"
+            safe_next = "/captura"
         elif role == "RH":
             safe_next = "/rh"
         else:
@@ -1790,11 +1790,10 @@ def home(request: Request):
             return RedirectResponse(url="/monitor")
         if user.get("role") == "RH":
             return RedirectResponse(url="/rh")
-    return RedirectResponse(url="/vigilancia")
+    return RedirectResponse(url="/captura")
 
 
-@app.get("/vigilancia", response_class=HTMLResponse)
-def vigilancia(request: Request):
+def render_vigilancia_page(request: Request):
     user = require_role_page(request, {"Admin", "Supremo", "Vigilancia"})
     if not user:
         return admin_login_redirect(request)
@@ -1802,6 +1801,16 @@ def vigilancia(request: Request):
         auto_close_overdue_records(conn, user.get("username", "Sistema"))
         active_guard = get_active_guard(conn)
     return templates.TemplateResponse("vigilancia.html", {"request": request, "active_user": user, "active_guard": active_guard})
+
+
+@app.get("/captura", response_class=HTMLResponse)
+def captura(request: Request):
+    return render_vigilancia_page(request)
+
+
+@app.get("/vigilancia", response_class=HTMLResponse)
+def vigilancia(request: Request):
+    return render_vigilancia_page(request)
 
 
 @app.get("/vigilantes", response_class=HTMLResponse)
@@ -3334,6 +3343,21 @@ def png_response(img: Image.Image, filename: str, inline: bool = True):
     return StreamingResponse(output, media_type="image/png", headers={"Content-Disposition": f"{disposition}; filename={filename}"})
 
 
+def image_png_bytes(img: Image.Image, dpi: Optional[tuple] = None) -> bytes:
+    output = io.BytesIO()
+    save_kwargs = {"format": "PNG", "optimize": True, "compress_level": 6}
+    if dpi:
+        save_kwargs["dpi"] = dpi
+    img.save(output, **save_kwargs)
+    return output.getvalue()
+
+
+def png_response_dpi(img: Image.Image, filename: str, inline: bool = True, dpi: Optional[tuple] = None):
+    output = io.BytesIO(image_png_bytes(img, dpi=dpi))
+    disposition = "inline" if inline else "attachment"
+    return StreamingResponse(output, media_type="image/png", headers={"Content-Disposition": f"{disposition}; filename={filename}"})
+
+
 @app.get("/qr/{employee_id}.png")
 def qr_png(employee_id: str):
     employee_id = clean_id(employee_id)
@@ -3372,6 +3396,118 @@ def qr_card_png(employee_id: str):
             raise HTTPException(status_code=404, detail="Empleado no encontrado")
     filename = f"CELULAR_{employee_file_base(emp)}.png"
     return png_response(generate_cell_card_image(emp), filename, inline=True)
+
+
+def draw_wrapped_center(draw: ImageDraw.ImageDraw, text_value: str, box, font, fill, line_gap: int = 8, max_lines: int = 2):
+    x1, y1, x2, y2 = box
+    words = str(text_value or "").split()
+    if not words:
+        return
+    lines = []
+    current = ""
+    for word in words:
+        test = (current + " " + word).strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= (x2 - x1) or not current:
+            current = test
+        else:
+            lines.append(current)
+            current = word
+            if len(lines) >= max_lines - 1:
+                break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and len(words) > len(" ".join(lines).split()):
+        last = lines[-1]
+        while last and draw.textbbox((0, 0), last + "...", font=font)[2] > (x2 - x1):
+            last = last[:-1].rstrip()
+        lines[-1] = last + "..."
+    heights = [draw.textbbox((0, 0), ln, font=font)[3] - draw.textbbox((0, 0), ln, font=font)[1] for ln in lines]
+    total_h = sum(heights) + line_gap * (len(lines)-1)
+    y = y1 + ((y2 - y1) - total_h) / 2
+    for ln, h in zip(lines, heights):
+        bbox = draw.textbbox((0, 0), ln, font=font)
+        tw = bbox[2] - bbox[0]
+        draw.text((x1 + ((x2-x1)-tw)/2, y), ln, font=font, fill=fill)
+        y += h + line_gap
+
+
+def generate_badge_card_image(emp: dict) -> Image.Image:
+    """Gafete vertical 6 x 10 cm a 300 dpi: 708 x 1181 px."""
+    employee_id = emp["id"]
+    W, H = 708, 1181
+    azul = (5, 26, 57)
+    azul2 = (12, 48, 96)
+    azul_claro = (229, 240, 255)
+    blanco = (255, 255, 255)
+    gris = (246, 248, 252)
+    oscuro = (24, 32, 42)
+    muted = (92, 104, 120)
+
+    img = Image.new("RGB", (W, H), blanco)
+    draw = ImageDraw.Draw(img)
+
+    # Fondo y encabezado
+    draw.rounded_rectangle((22, 22, W-22, H-22), radius=34, fill=gris, outline=(210, 220, 235), width=3)
+    draw.rounded_rectangle((22, 22, W-22, 205), radius=34, fill=azul)
+    draw.rectangle((22, 145, W-22, 205), fill=azul)
+    center_text(draw, (0, 56, W), "ALTIMA", load_font(42, True), blanco)
+    center_text(draw, (0, 112, W), "GAFETE DE ACCESO", load_font(20, False), (220, 235, 248))
+
+    # QR
+    qr_size = 435
+    qr = make_qr_core(employee_id, qr_size)
+    qr_x = (W - qr_size) // 2
+    qr_y = 250
+    draw.rounded_rectangle((qr_x-24, qr_y-24, qr_x+qr_size+24, qr_y+qr_size+24), radius=34, fill=blanco, outline=azul_claro, width=5)
+    img.paste(qr, (qr_x, qr_y))
+
+    # Nombre y datos
+    name_font = text_fit(draw, emp.get("nombre") or employee_id, W-100, 44, True, 27)
+    draw_wrapped_center(draw, emp.get("nombre") or "Empleado", (56, 742, W-56, 835), name_font, oscuro, line_gap=5, max_lines=2)
+    center_text(draw, (56, 850, W-112), employee_id, load_font(34, True), azul)
+
+    info = " · ".join([x for x in [emp.get("area") or "Área", emp.get("puesto") or "", emp.get("turno") or "Turno"] if x])
+    info_font = text_fit(draw, info, W-90, 22, False, 17)
+    center_text(draw, (45, 910, W-90), info, info_font, muted)
+
+    vehicle_text = "CON VEHÍCULO" if emp.get("tiene_vehiculo") else "SIN VEHÍCULO"
+    badge_w, badge_h = 300, 52
+    bx = (W-badge_w)//2
+    by = 970
+    draw.rounded_rectangle((bx, by, bx+badge_w, by+badge_h), radius=26, fill=azul2)
+    center_text(draw, (bx, by+14, badge_w), vehicle_text, load_font(18, True), blanco)
+
+    center_text(draw, (50, 1062, W-100), "Escanear en vigilancia", load_font(20, False), muted)
+    center_text(draw, (50, 1092, W-100), "El QR contiene únicamente el ID", load_font(16, False), (120,130,145))
+    return img
+
+
+@app.get("/qr/gafete/{employee_id}.png")
+def qr_badge_png(employee_id: str):
+    employee_id = clean_id(employee_id)
+    with engine.begin() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    filename = f"GAFETE_6x10cm_{employee_file_base(emp)}.png"
+    return png_response_dpi(generate_badge_card_image(emp), filename, inline=True, dpi=(300, 300))
+
+
+@app.get("/qr/gafetes/todos.zip")
+def qr_badges_zip(request: Request):
+    require_admin_http(request)
+    with engine.begin() as conn:
+        employees = fetch_all(conn, "SELECT * FROM employees ORDER BY nombre")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+        for emp in employees:
+            img = generate_badge_card_image(emp)
+            zf.writestr(f"GAFETE_6x10cm_{employee_file_base(emp)}.png", image_png_bytes(img, dpi=(300, 300)))
+        zf.writestr("LEEME.txt", "Gafetes verticales de 10 cm de alto por 6 cm de ancho, generados a 300 dpi. Cada archivo contiene nombre completo e ID del empleado.\n")
+    output.seek(0)
+    filename = f"gafetes_6x10cm_{now_mx().strftime('%Y%m%d_%H%M')}.zip"
+    return StreamingResponse(output, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def generate_guard_qr_image(guard: dict) -> Image.Image:
