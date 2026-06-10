@@ -113,6 +113,74 @@ def clean_id(value: str) -> str:
     return value[:40]
 
 
+def clean_employee_id(value) -> str:
+    """Normaliza IDs de empleado. Regla vigente: ID únicamente numérico."""
+    raw = as_text(value) if "as_text" in globals() else str(value or "").strip()
+    raw = raw.strip()
+    # Excel suele convertir 126 en 126.0 cuando juega a ser útil. Gracias, Excel.
+    if re.fullmatch(r"\d+\.0+", raw):
+        raw = raw.split(".", 1)[0]
+    raw = re.sub(r"\s+", "", raw)
+    return raw if re.fullmatch(r"\d+", raw) else ""
+
+
+def employee_id_number(value: str) -> int:
+    """Extrae el número usado para calcular el siguiente ID.
+    Usa IDs numéricos y también el tramo final de IDs viejos tipo EMP-000125 para migrar sin drama.
+    """
+    raw = as_text(value) if "as_text" in globals() else str(value or "")
+    raw = raw.strip()
+    if re.fullmatch(r"\d+", raw):
+        return int(raw)
+    match = re.search(r"(\d+)$", raw)
+    return int(match.group(1)) if match else 0
+
+
+def normalize_catalog_value(value: str) -> str:
+    """Normaliza textos de catálogo para reglas administrativas simples."""
+    return re.sub(r"\s+", " ", as_text(value).strip().upper())
+
+
+def is_gerencia_general_record(row: dict) -> bool:
+    """Registros de Gerencia General no cuentan para calcular el consecutivo operativo."""
+    area = normalize_catalog_value(row.get("area", ""))
+    puesto = normalize_catalog_value(row.get("puesto", ""))
+    return area == "GG" or puesto == "GERENCIA GENERAL"
+
+
+def next_numeric_employee_id(conn: Connection, used_extra: Optional[set[str]] = None) -> str:
+    """Devuelve el siguiente ID numérico operativo.
+
+    Regla vigente:
+    - El ID debe ser únicamente numérico.
+    - Para calcular el consecutivo se toma el número más alto de empleados que NO sean área GG
+      y que NO tengan puesto GERENCIA GENERAL.
+    - Luego se suma 1.
+    - Si ese número ya existe por algún registro excluido, se avanza al siguiente libre para no duplicar.
+    """
+    used_extra = {as_text(x) for x in (used_extra or set())}
+    rows = fetch_all(conn, "SELECT id, area, puesto FROM employees")
+
+    # Todos los IDs existentes se reservan para evitar duplicados, incluso los de GG/Gerencia General.
+    all_used = {as_text(r.get("id")) for r in rows}
+    all_used.update(used_extra)
+
+    max_operativo = 0
+    for row in rows:
+        if is_gerencia_general_record(row):
+            continue
+        max_operativo = max(max_operativo, employee_id_number(row.get("id")))
+
+    # IDs asignados durante una misma importación también deben empujar el consecutivo.
+    for employee_id in used_extra:
+        max_operativo = max(max_operativo, employee_id_number(employee_id))
+
+    candidate = max_operativo + 1
+    while str(candidate) in all_used:
+        candidate += 1
+    return str(candidate)
+
+
 def clean_guard_code(value: str) -> str:
     """Normaliza códigos de vigilante. Acepta QR como VIG:VIG-ALTIMA-1 o VIG-ALTIMA-1."""
     value = (value or "").strip().upper()
@@ -1480,7 +1548,7 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                 continue
             total_rows += 1
             record_id = as_text(row[col("id_registro")])
-            employee_id = clean_id(as_text(row[col("id_empleado")]))
+            employee_id = clean_employee_id(as_text(row[col("id_empleado")]))
             version_excel = as_text(row[col("updated_at_actual")])
             motivo = as_text(row[col("motivo_correccion")]) if col("motivo_correccion") is not None else ""
             if not record_id:
@@ -1668,17 +1736,17 @@ def seed_demo_if_empty() -> None:
         ts = now_mx().isoformat()
         demo = [
             {
-                "id": "EMP-000123", "nombre": "Juan Pérez", "area": "Producción", "puesto": "Operador", "turno": "Día",
+                "id": "123", "nombre": "Juan Pérez", "area": "Producción", "puesto": "Operador", "turno": "Día",
                 "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 0, "foto_path": "", "qr_activo": 1,
                 "observaciones": "Demo con vehículo", "created_at": ts, "updated_at": ts,
             },
             {
-                "id": "EMP-000124", "nombre": "María López", "area": "Calidad", "puesto": "Inspectora", "turno": "Día",
+                "id": "124", "nombre": "María López", "area": "Calidad", "puesto": "Inspectora", "turno": "Día",
                 "estado": "Activo", "tiene_vehiculo": 0, "requiere_fotos_vehiculo": 0, "foto_path": "", "qr_activo": 1,
                 "observaciones": "Demo sin vehículo", "created_at": ts, "updated_at": ts,
             },
             {
-                "id": "EMP-000125", "nombre": "Carlos Ramos", "area": "Almacén", "puesto": "Auxiliar", "turno": "Noche",
+                "id": "125", "nombre": "Carlos Ramos", "area": "Almacén", "puesto": "Auxiliar", "turno": "Noche",
                 "estado": "Activo", "tiene_vehiculo": 1, "requiere_fotos_vehiculo": 0, "foto_path": "", "qr_activo": 1,
                 "observaciones": "Demo turno noche", "created_at": ts, "updated_at": ts,
             },
@@ -1912,6 +1980,20 @@ def monitor(request: Request):
             text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_at IS NOT NULL"),
             {"today": today}
         ).scalar() or 0
+        absent_today = fetch_all(conn,
+            """
+            SELECT e.id, e.nombre, e.area, e.puesto, e.turno
+            FROM employees e
+            WHERE e.estado = 'Activo'
+              AND NOT EXISTS (
+                SELECT 1 FROM attendance a
+                WHERE a.employee_id = e.id AND a.shift_date = :today
+              )
+            ORDER BY e.area, e.nombre
+            """,
+            {"today": today}
+        )
+        absent_count = len(absent_today)
         late_today = conn.execute(
             text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_status IN ('Tarde', 'Retardo')"),
             {"today": today}
@@ -1937,12 +2019,15 @@ def monitor(request: Request):
             SELECT a.*, e.nombre, e.area
             FROM attendance a
             JOIN employees e ON e.id = a.employee_id
-            WHERE a.entry_status IN ('Tarde', 'Retardo')
-               OR a.exit_status IN ('Salida temprana', 'Extra')
-               OR a.incident != ''
+            WHERE a.shift_date = :today
+              AND (a.entry_status IN ('Tarde', 'Retardo')
+                   OR a.exit_status IN ('Salida temprana', 'Extra')
+                   OR a.incident != ''
+                   OR a.review_required = 1)
             ORDER BY a.updated_at DESC
             LIMIT 40
-            """
+            """,
+            {"today": today}
         )
     return templates.TemplateResponse(
         "monitor.html",
@@ -1953,6 +2038,8 @@ def monitor(request: Request):
             "late_today": late_today,
             "extra_today": extra_today,
             "vehicles_inside": vehicles_inside,
+            "absent_count": absent_count,
+            "absent_today": absent_today,
             "inside": inside,
             "incidents": incidents,
         }
@@ -2385,6 +2472,12 @@ def rh_dashboard(request: Request, fecha: Optional[str] = None):
         auto_close_overdue_records(conn, rh_user["username"])
         summary = {
             "presentes": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND entry_at IS NOT NULL"), {"fecha": fecha}).scalar() or 0,
+            "faltas": conn.execute(text("""
+                SELECT COUNT(*) FROM employees e
+                WHERE e.estado='Activo' AND NOT EXISTS (
+                  SELECT 1 FROM attendance a WHERE a.employee_id=e.id AND a.shift_date=:fecha
+                )
+            """), {"fecha": fecha}).scalar() or 0,
             "retardos": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND entry_status IN ('Tarde','Retardo')"), {"fecha": fecha}).scalar() or 0,
             "min_retardo": conn.execute(text("SELECT COALESCE(SUM(late_minutes),0) FROM attendance WHERE shift_date=:fecha AND entry_status IN ('Tarde','Retardo')"), {"fecha": fecha}).scalar() or 0,
             "salidas_tempranas": conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date=:fecha AND exit_status='Salida temprana'"), {"fecha": fecha}).scalar() or 0,
@@ -2397,6 +2490,14 @@ def rh_dashboard(request: Request, fecha: Optional[str] = None):
             JOIN employees e ON e.id = a.employee_id
             WHERE a.shift_date=:fecha
             ORDER BY COALESCE(a.entry_at, a.created_at) ASC
+        """, {"fecha": fecha})
+        absent_rows = fetch_all(conn, """
+            SELECT e.id, e.nombre, e.area, e.puesto, e.turno
+            FROM employees e
+            WHERE e.estado='Activo' AND NOT EXISTS (
+              SELECT 1 FROM attendance a WHERE a.employee_id=e.id AND a.shift_date=:fecha
+            )
+            ORDER BY e.area, e.nombre
         """, {"fecha": fecha})
         weekly_rows = fetch_all(conn, """
             SELECT e.id AS employee_id, e.nombre, e.area, COALESCE(a.turno, e.turno) AS turno,
@@ -2415,7 +2516,7 @@ def rh_dashboard(request: Request, fecha: Optional[str] = None):
             LIMIT 80
         """, {"start": start.isoformat(), "end": end.isoformat()})
     return templates.TemplateResponse("rh.html", {
-        "request": request, "fecha": fecha, "summary": summary, "daily_rows": daily_rows,
+        "request": request, "fecha": fecha, "summary": summary, "daily_rows": daily_rows, "absent_rows": absent_rows,
         "weekly_rows": weekly_rows, "start": start, "end": end,
     })
 
@@ -2507,7 +2608,8 @@ def empleado_nuevo(request: Request):
     
     with engine.begin() as conn:
         turnos = fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1 ORDER BY name")
-    return templates.TemplateResponse("empleado_form.html", {"request": request, "employee": None, "turnos": turnos})
+        next_id = next_numeric_employee_id(conn)
+    return templates.TemplateResponse("empleado_form.html", {"request": request, "employee": None, "turnos": turnos, "next_id": next_id})
 
 
 @app.get("/personal/{employee_id}", response_class=HTMLResponse)
@@ -2543,15 +2645,22 @@ async def empleado_guardar(
     foto: Optional[UploadFile] = File(None),
 ):
     admin_user = require_admin_http(request)
-    employee_id = clean_id(id)
-    if not employee_id or not nombre.strip():
-        raise HTTPException(status_code=400, detail="ID y nombre son obligatorios")
+    requested_id = clean_employee_id(id)
+    if id and not requested_id:
+        raise HTTPException(status_code=400, detail="El ID de empleado debe ser únicamente numérico")
+    if not nombre.strip():
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio")
     ts = now_mx().isoformat()
     foto_path = ""
     with engine.begin() as conn:
+        employee_id = requested_id or next_numeric_employee_id(conn)
         exists = get_employee(conn, employee_id)
+        # Si la pantalla quedó abierta y alguien creó ese ID mientras tanto, avanzamos al siguiente disponible.
         if exists:
-            raise HTTPException(status_code=400, detail="Ese ID ya existe. Edita el expediente existente.")
+            employee_id = next_numeric_employee_id(conn)
+            exists = get_employee(conn, employee_id)
+        if exists:
+            raise HTTPException(status_code=400, detail="No se pudo asignar ID automático. Intenta de nuevo.")
         conn.execute(
             text(
                 """
@@ -2691,7 +2800,7 @@ def plantilla_empleados(request: Request):
     ws = wb.active
     ws.title = "empleados"
     headers = [
-        "ID empleado",
+        "ID empleado (opcional)",
         "Nombre completo",
         "Area",
         "Puesto",
@@ -2701,8 +2810,8 @@ def plantilla_empleados(request: Request):
         "Observaciones",
     ]
     ws.append(headers)
-    ws.append(["EMP-000126", "Nombre Apellido", "Producción", "Operador", "Día", "Activo", "Sí", "Ejemplo"])
-    ws.append(["EMP-000127", "Nombre Apellido", "Calidad", "Inspectora", "Noche", "Activo", "No", "Ejemplo"])
+    ws.append(["", "Nombre Apellido", "Producción", "Operador", "Día", "Activo", "Sí", "ID vacío = automático"])
+    ws.append(["", "Nombre Apellido", "Calidad", "Inspectora", "Noche", "Activo", "No", "ID vacío = automático"])
     for col in range(1, len(headers) + 1):
         ws.column_dimensions[chr(64 + col)].width = 24
     output = io.BytesIO()
@@ -2725,11 +2834,9 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
         return templates.TemplateResponse("importar.html", {"request": request, "result": {"ok": False, "errors": [f"No se pudo leer el Excel: {exc}"]}})
 
     ws = wb.active
-    raw_headers = [as_text(cell.value) for cell in ws[1]]
-    normalized = {h.lower().strip(): idx for idx, h in enumerate(raw_headers)}
 
     aliases = {
-        "id": ["id empleado", "id", "empleado", "codigo", "código"],
+        "id": ["id empleado", "id empleado (opcional)", "id", "empleado", "codigo", "código"],
         "nombre": ["nombre completo", "nombre"],
         "area": ["area", "área"],
         "puesto": ["puesto"],
@@ -2740,13 +2847,12 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
         "observaciones": ["observaciones", "obs"],
     }
 
-    def index_for(key: str) -> Optional[int]:
-        for alias in aliases[key]:
-            if alias in normalized:
-                return normalized[alias]
-        return None
+    required = ["nombre", "turno", "estado"]
+    header_row, idx_import = detect_import_header(ws, aliases, required)
 
-    required = ["id", "nombre", "turno", "estado"]
+    def index_for(key: str) -> Optional[int]:
+        return idx_import.get(key)
+
     missing = [key for key in required if index_for(key) is None]
     if missing:
         return templates.TemplateResponse("importar.html", {"request": request, "result": {"ok": False, "errors": ["Faltan columnas requeridas: " + ", ".join(missing)]}})
@@ -2756,12 +2862,24 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
     seen = set()
     with engine.begin() as conn:
         allowed_turnos = {r["name"] for r in fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1")}
+        base_used = {as_text(r["id"]) for r in fetch_all(conn, "SELECT id FROM employees")}
+        next_candidate = int(next_numeric_employee_id(conn))
     allowed_turnos.update({"Día", "Dia", "Noche"})
 
-    for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+    id_idx = index_for("id")
+    for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
         if not any(row):
             continue
-        employee_id = clean_id(as_text(row[index_for("id")]))
+        raw_employee_id = as_text(row[id_idx]) if id_idx is not None else ""
+        if raw_employee_id:
+            employee_id = clean_employee_id(raw_employee_id)
+            if not employee_id:
+                errors.append(f"Fila {row_number}: el ID debe ser únicamente numérico: {raw_employee_id}")
+        else:
+            while str(next_candidate) in base_used or str(next_candidate) in seen:
+                next_candidate += 1
+            employee_id = str(next_candidate)
+            next_candidate += 1
         nombre = as_text(row[index_for("nombre")])
         turno = as_text(row[index_for("turno")]) or "Día"
         estado = as_text(row[index_for("estado")]) or "Activo"
@@ -2771,8 +2889,6 @@ async def importar_empleados(request: Request, archivo: UploadFile = File(...), 
         tiene_vehiculo = bool_from_excel(row[index_for("tiene_vehiculo")]) if index_for("tiene_vehiculo") is not None else 0
         requiere_fotos = 0
 
-        if not employee_id:
-            errors.append(f"Fila {row_number}: falta ID empleado")
         if not nombre:
             errors.append(f"Fila {row_number}: falta nombre")
         if turno not in allowed_turnos:
@@ -2867,8 +2983,8 @@ def plantilla_asistencias(request: Request):
         "Vehiculo", "Observaciones",
     ]
     ws.append(headers)
-    ws.append(["", "EMP-000126", now_mx().date().isoformat(), "Día", "08:00", "19:00", "Vigilancia", "Vigilancia", "", "", "No", "Ejemplo histórico"] )
-    ws.append(["", "EMP-000127", now_mx().date().isoformat(), "Noche", "19:00", "08:00", "Vigilancia", "Vigilancia", "", "", "No", "Salida del día siguiente si solo pones hora"] )
+    ws.append(["", "126", now_mx().date().isoformat(), "Día", "08:00", "19:00", "IMPORTACION_HISTORICA", "IMPORTACION_HISTORICA", "", "", "No", "Ejemplo histórico: motivos pueden ir vacíos"] )
+    ws.append(["", "127", now_mx().date().isoformat(), "Noche", "19:00", "08:00", "IMPORTACION_HISTORICA", "IMPORTACION_HISTORICA", "", "", "No", "Salida del día siguiente si solo pones hora"] )
     for col in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(col)].width = 24
     style_worksheet(ws, "Plantilla de asistencia histórica")
@@ -2889,6 +3005,29 @@ def _idx_from_aliases(normalized: dict, aliases: list[str]) -> Optional[int]:
     return None
 
 
+def detect_import_header(ws, aliases: dict, required_keys: list[str], max_scan: int = 10):
+    """Detecta la fila real de encabezados en plantillas con título arriba.
+    Devuelve (header_row_number, idx_map). Así no nos tropezamos con archivos bonitos,
+    esa rareza humana de poner un título antes de las columnas.
+    """
+    best_score = -1
+    best_row = 1
+    best_idx = {k: None for k in aliases}
+    last_row = min(ws.max_row or 1, max_scan)
+    for row_number in range(1, last_row + 1):
+        raw_headers = [as_text(cell.value).lower().strip() for cell in ws[row_number]]
+        normalized = {h: idx for idx, h in enumerate(raw_headers) if h}
+        idx_map = {k: _idx_from_aliases(normalized, v) for k, v in aliases.items()}
+        score = sum(1 for v in idx_map.values() if v is not None)
+        if score > best_score:
+            best_score = score
+            best_row = row_number
+            best_idx = idx_map
+        if all(idx_map.get(key) is not None for key in required_keys):
+            return row_number, idx_map
+    return best_row, best_idx
+
+
 def attendance_row_values(row, index):
     return row[index] if index is not None and index < len(row) else None
 
@@ -2903,8 +3042,6 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
         return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": [f"No se pudo leer el Excel: {exc}"]}, "result": None})
 
     ws = wb.active
-    raw_headers = [as_text(cell.value).lower().strip() for cell in ws[1]]
-    normalized = {h: idx for idx, h in enumerate(raw_headers) if h}
     aliases = {
         "id_registro": ["id registro", "id_registro", "registro", "id asistencia"],
         "employee_id": ["id empleado", "id_empleado", "empleado", "id", "codigo", "código"],
@@ -2919,10 +3056,10 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
         "vehiculo": ["vehiculo", "vehículo", "vehicle"],
         "observaciones": ["observaciones", "obs", "incidencia"],
     }
-    idx = {k: _idx_from_aliases(normalized, v) for k, v in aliases.items()}
+    header_row, idx = detect_import_header(ws, aliases, ["employee_id", "shift_date", "entrada"])
     missing = [name for name in ["employee_id", "shift_date", "entrada"] if idx[name] is None]
     if missing:
-        return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": ["Faltan columnas requeridas: " + ", ".join(missing)]}, "result": None})
+        return templates.TemplateResponse("importar.html", {"request": request, "result_asistencias": {"ok": False, "errors": ["Faltan columnas requeridas: " + ", ".join(missing) + ". Revisa que no se haya borrado la fila de encabezados."]}, "result": None})
 
     errors = []
     rows_to_apply = []
@@ -2931,7 +3068,7 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
     with engine.begin() as conn:
         allowed_turnos = {r["name"] for r in fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1")}
 
-    for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+    for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
         if not any(row):
             continue
         raw_id_reg = attendance_row_values(row, idx["id_registro"])
@@ -2939,13 +3076,15 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
             id_registro = str(int(raw_id_reg))
         else:
             id_registro = as_text(raw_id_reg)
-        employee_id = clean_id(as_text(attendance_row_values(row, idx["employee_id"])))
+        employee_id = clean_employee_id(as_text(attendance_row_values(row, idx["employee_id"])))
         shift_day = parse_excel_date_value(attendance_row_values(row, idx["shift_date"]))
         turno = as_text(attendance_row_values(row, idx["turno"])) if idx["turno"] is not None else ""
         if turno == "Dia":
             turno = "Día"
-        guardia_entrada = as_text(attendance_row_values(row, idx["guardia_entrada"])) if idx["guardia_entrada"] is not None else "Importación"
-        guardia_salida = as_text(attendance_row_values(row, idx["guardia_salida"])) if idx["guardia_salida"] is not None else "Importación"
+        guardia_entrada = as_text(attendance_row_values(row, idx["guardia_entrada"])) if idx["guardia_entrada"] is not None else ""
+        guardia_salida = as_text(attendance_row_values(row, idx["guardia_salida"])) if idx["guardia_salida"] is not None else ""
+        guardia_entrada = guardia_entrada or "IMPORTACION_HISTORICA"
+        guardia_salida = guardia_salida or "IMPORTACION_HISTORICA"
         motivo_retardo = as_text(attendance_row_values(row, idx["motivo_retardo"])) if idx["motivo_retardo"] is not None else ""
         motivo_salida = as_text(attendance_row_values(row, idx["motivo_salida"])) if idx["motivo_salida"] is not None else ""
         vehiculo = bool_from_excel(attendance_row_values(row, idx["vehiculo"])) if idx["vehiculo"] is not None else 0
@@ -2982,8 +3121,8 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
         eval_entry_data = evaluate_entry(config, shift_day.isoformat(), entry_dt)
         entry_stat = eval_entry_data["status"]
         if entry_stat == "Retardo" and not motivo_retardo:
-            errors.append(f"Fila {row_number}: retardo detectado y falta motivo")
-            continue
+            motivo_retardo = "NO REGISTRADO - CARGA HISTORICA"
+            observaciones = (observaciones + " | " if observaciones else "") + "Retardo histórico sin motivo original."
 
         eval_exit_data = evaluate_exit(config, shift_day.isoformat(), exit_dt) if exit_dt else {
             "status": "",
@@ -2999,8 +3138,8 @@ async def importar_asistencias_historicas(request: Request, archivo_asistencias:
             "extra_minutes": 0,
         }
         if exit_dt and eval_exit_data["status"] == "Salida temprana" and not motivo_salida:
-            errors.append(f"Fila {row_number}: salida temprana detectada y falta motivo")
-            continue
+            motivo_salida = "NO REGISTRADO - CARGA HISTORICA"
+            observaciones = (observaciones + " | " if observaciones else "") + "Salida temprana histórica sin motivo original."
 
         key = id_registro or f"{employee_id}|{shift_day.isoformat()}|{turno}"
         if key in seen_keys:
@@ -3601,7 +3740,7 @@ def api_scan(request: Request, raw_code: str):
     user = require_vigilancia_http(request)
     raw_code = as_text(raw_code)
     guard_code = clean_guard_code(raw_code)
-    employee_id = clean_id(raw_code)
+    employee_id = clean_employee_id(raw_code)
     dt = now_mx()
     with engine.begin() as conn:
         auto_close_overdue_records(conn, user["username"])
@@ -3653,7 +3792,9 @@ def api_scan(request: Request, raw_code: str):
 @app.get("/api/empleado/{employee_id}")
 def api_empleado(request: Request, employee_id: str):
     user = require_vigilancia_http(request)
-    employee_id = clean_id(employee_id)
+    employee_id = clean_employee_id(employee_id)
+    if not employee_id:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "El ID de empleado debe ser numérico"})
     dt = now_mx()
     with engine.begin() as conn:
         auto_close_overdue_records(conn, user["username"])
@@ -3705,7 +3846,9 @@ async def api_registro(
     foto_cajuela: Optional[UploadFile] = File(None),
 ):
     user = require_vigilancia_http(request)
-    employee_id = clean_id(employee_id)
+    employee_id = clean_employee_id(employee_id)
+    if not employee_id:
+        return JSONResponse(status_code=400, content={"ok": False, "message": "El ID de empleado debe ser numérico"})
     dt = now_mx()
     ts = dt.isoformat()
 

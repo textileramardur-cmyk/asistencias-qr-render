@@ -22,7 +22,7 @@ Sistema web FastAPI para control de asistencias por QR con PostgreSQL en Render.
 - Reporte de retardos por fecha.
 - Reporte semanal acumulado.
 - Vista sobria para RH.
-- Importación masiva de empleados desde Excel.
+- Importación masiva de empleados desde Excel con ID numérico automático.
 - Exportación a Excel.
 - Correcciones masivas desde Excel con auditoría.
 - Módulo de Configuración.
@@ -82,6 +82,14 @@ uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
 ## Reglas operativas clave
+
+### IDs de empleados
+
+- Los empleados nuevos usan ID únicamente numérico.
+- Al crear un empleado manualmente, el sistema propone automáticamente el último ID numérico + 1.
+- En importación Excel, si dejas el ID vacío, el sistema asigna automáticamente el siguiente ID disponible.
+- Si capturas un ID en Excel, debe ser numérico. IDs antiguos tipo `EMP-000125` ya no se usan para nuevos empleados.
+
 
 ### Entrada / salida automática
 
@@ -188,3 +196,23 @@ La vigilancia sigue siendo simple: escanear QR de vigilante, luego QR de emplead
 - Gafetes individuales: `/qr/gafete/ID_EMPLEADO.png`.
 - Exportación masiva de gafetes de 10 cm x 6 cm: `/qr/gafetes/todos.zip`.
 - Los gafetes se generan como PNG a 300 dpi, con nombre completo e ID del empleado en el nombre del archivo.
+
+## Actualización: faltas, incidencias del día e importación histórica más flexible
+
+- El dashboard muestra un bloque de empleados activos sin registro en el día actual.
+- Las incidencias recientes del dashboard ahora se filtran únicamente por la fecha actual.
+- La importación histórica de asistencias detecta encabezados aunque el Excel tenga un título arriba de la tabla.
+- Para cargas históricas, si falta guardia se usa `IMPORTACION_HISTORICA`.
+- Para cargas históricas, si se detecta retardo o salida temprana sin motivo, se asigna `NO REGISTRADO - CARGA HISTORICA` y se agrega observación.
+
+
+## Regla de ID numérico automático
+
+Los empleados nuevos usan ID únicamente numérico. Cuando el ID se deja vacío en alta manual o importación Excel, el sistema calcula el siguiente ID tomando el número más alto de empleados operativos y sumando 1.
+
+Para este cálculo NO se consideran empleados con:
+
+- Área `GG`
+- Puesto `GERENCIA GENERAL`
+
+Aun así, el sistema evita duplicados: si el candidato calculado ya existe por algún registro excluido, avanza al siguiente número disponible. Porque duplicar IDs sería una forma muy eficiente de fabricar caos administrativo.

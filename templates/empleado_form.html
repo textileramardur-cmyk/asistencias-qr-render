@@ -2,12 +2,13 @@
 {% block content %}
 <section class="page-head">
   <h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
-  <p>En esta versión no se cargan fotos. El expediente queda enfocado en ID, turno, estado y configuración de vehículo.</p>
+  <p>El ID es numérico y se asigna automáticamente con el último ID operativo + 1. No considera área GG ni puesto GERENCIA GENERAL para calcular el consecutivo.</p>
 </section>
 
 <form class="card form-grid" action="{{ '/personal/' ~ employee.id ~ '/guardar' if employee else '/personal/guardar' }}" method="post" enctype="multipart/form-data">
   <label>ID empleado
-    <input name="id" value="{{ employee.id if employee else '' }}" {{ 'readonly' if employee else '' }} required />
+    <input name="id" value="{{ employee.id if employee else next_id }}" readonly required inputmode="numeric" pattern="[0-9]+" />
+    <small>ID numérico automático. Calculado con el número más alto que no sea área GG ni puesto GERENCIA GENERAL + 1.</small>
   </label>
   <label>Nombre completo
     <input name="nombre" value="{{ employee.nombre if employee else '' }}" required />
