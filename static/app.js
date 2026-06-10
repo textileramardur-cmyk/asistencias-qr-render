@@ -44,10 +44,11 @@ function toggleManualPanel() {
 function syncPanelsByPreview() {
   const late = byId('latePanel');
   const early = byId('earlyPanel');
-  hide(late); hide(early);
+  const lunch = byId('lunchPanel');
+  hide(late); hide(early); hide(lunch);
   if (!currentPreview) return;
   if (currentPreview.status === 'Retardo') show(late);
-  if (currentPreview.status === 'Salida temprana') show(early);
+  if (currentPreview.status === 'Salida temprana') { show(early); show(lunch); }
 }
 
 function paintEvaluation(preview) {
@@ -162,6 +163,10 @@ async function submitAttendance(event) {
   }
   if (currentPreview?.status === 'Salida temprana' && !byId('earlyReason').value) {
     alert('Hay salida temprana. El motivo es obligatorio.');
+    return;
+  }
+  if (currentPreview?.status === 'Salida temprana' && !byId('lunchTaken').value) {
+    alert('Salida temprana: indica si tomó su hora de comida.');
     return;
   }
 

@@ -54,6 +54,12 @@
     <p>Altas, ediciones y registros operativos guardados en la bitácora del sistema.</p>
     <a class="btn secondary" href="/exportar/auditoria.xlsx">Descargar auditoría</a>
   </article>
+
+  <article class="card export-card">
+    <h3>Exportar para nómina</h3>
+    <p>ID, nombre completo, minutos de retardo + salida temprana, faltas y tiempo total trabajado descontando comida según regla.</p>
+    <button class="btn primary" type="button" onclick="downloadExcel('/exportar/nomina.xlsx', true)">Descargar nómina</button>
+  </article>
 </section>
 {% endblock %}
 

@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS attendance (
   review_status TEXT DEFAULT '',
   auto_closed_at TEXT DEFAULT '',
   anulled INTEGER DEFAULT 0,
+  lunch_taken TEXT DEFAULT '',
+  worked_minutes INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

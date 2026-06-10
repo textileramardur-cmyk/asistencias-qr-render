@@ -245,3 +245,15 @@ La tolerancia de entrada solo determina si existe retardo. Si el registro es ret
 Ejemplo: entrada 08:00, tolerancia 5 minutos, llegada 08:08 = retardo de 8 minutos.
 
 La misma lógica aplica para salida temprana: la tolerancia decide si existe incidencia; los minutos se calculan contra la salida programada.
+
+## Actualización: dashboard, rangos, nómina y captura segura
+
+- Dashboard mejorado con selector por día, semana, año o rango.
+- KPIs de retardos y faltas de hoy, mes y año.
+- Ranking de puntualidad en dashboard y reporte acumulado.
+- Reporte acumulado ahora permite rangos personalizados y exportación Excel.
+- Exportación para nómina en `/exportar/nomina.xlsx` con ID, nombre, minutos de retardo + salida temprana, faltas y tiempo total trabajado.
+- En salida temprana se exige indicar si tomó hora de comida. Si sí, se descuenta 1 hora; si no, no se descuenta.
+- El cálculo de tiempo trabajado se limita al turno: entrada antes del horario no suma tiempo extra dentro de nómina.
+- La salida accidental inmediata queda bloqueada: después de registrar entrada, solo se puede capturar salida después de 5 minutos.
+- El acceso a recalcular reglas se quitó de la barra lateral y queda dentro de Configuración.

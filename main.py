@@ -40,6 +40,7 @@ SESSION_DAYS = int(os.getenv("SESSION_DAYS", "14"))
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "6"))
 LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
+MIN_EXIT_AFTER_ENTRY_MINUTES = int(os.getenv("MIN_EXIT_AFTER_ENTRY_MINUTES", "5"))
 # Usuarios semilla solicitados para beta. Se guardan con hash, no en texto plano en la base.
 DEFAULT_SYSTEM_USERS = [
     {"username": "Adjm", "password": "Adjm4rdur", "role": "Supremo", "display_name": "Usuario Supremo"},
@@ -527,6 +528,8 @@ def init_db() -> None:
             "review_status": "TEXT DEFAULT ''",
             "auto_closed_at": "TEXT DEFAULT ''",
             "anulled": "INTEGER DEFAULT 0",
+            "lunch_taken": "TEXT DEFAULT ''",
+            "worked_minutes": "INTEGER DEFAULT 0",
         }
         for col, definition in add_columns.items():
             if col not in existing_columns:
@@ -1475,7 +1478,7 @@ def get_attendance_export_rows(conn: Connection, fecha_inicio: Optional[str] = N
         "ID registro", "ID empleado", "Nombre", "Área", "Puesto", "Fecha turno", "Turno",
         "Entrada", "Salida", "Entrada programada", "Salida programada", "Límite retardo", "Límite extra",
         "Guardia entrada", "Guardia salida", "Estado entrada", "Estado salida",
-        "Min retardo", "Min salida temprana", "Min extra",
+        "Min retardo", "Min salida temprana", "Min extra", "Comida tomada", "Min trabajados",
         "Motivo retardo", "Motivo salida temprana", "Salida provisional", "Pendiente revisión", "Estado revisión", "Anulado",
         "Vehículo esperado", "Vehículo registrado", "Incidencia / observaciones", "Creado", "Actualizado"
     ]
@@ -1486,7 +1489,7 @@ def get_attendance_export_rows(conn: Connection, fecha_inicio: Optional[str] = N
             short_datetime(row.get("scheduled_entry_at")), short_datetime(row.get("scheduled_exit_at")),
             short_datetime(row.get("entry_limit_at")), short_datetime(row.get("extra_limit_at")),
             row["entry_guard"], row["exit_guard"], row["entry_status"], row["exit_status"],
-            row.get("late_minutes") or 0, row.get("early_minutes") or 0, row.get("extra_minutes") or 0,
+            row.get("late_minutes") or 0, row.get("early_minutes") or 0, row.get("extra_minutes") or 0, row.get("lunch_taken") or "", row.get("worked_minutes") or 0,
             row["late_reason"], row["early_reason"], bool_text(row.get("provisional_exit") or 0), bool_text(row.get("review_required") or 0), row.get("review_status") or "", bool_text(row.get("anulled") or 0),
             bool_text(row["vehicle_expected"]), bool_text(row["vehicle_entered"]), row["incident"], short_datetime(row["created_at"]), short_datetime(row["updated_at"]),
         ]
@@ -2160,16 +2163,26 @@ def vigilante_borrar(request: Request, guard_code: str, confirmacion: str = Form
 
 
 @app.get("/monitor", response_class=HTMLResponse)
-def monitor(request: Request):
+def monitor(
+    request: Request,
+    period: str = "day",
+    fecha: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+):
     admin_user = require_admin_page(request)
     if not admin_user:
         return admin_login_redirect(request)
-    today = now_mx().date().isoformat()
+    today_date = now_mx().date()
+    today = today_date.isoformat()
+    period, start, end, period_label = resolve_period_range(period, fecha, fecha_inicio, fecha_fin)
+    month_start, month_end = month_bounds()
+    year_start, year_end = year_bounds()
     with engine.begin() as conn:
         auto_close_overdue_records(conn, admin_user["username"])
         total_employees = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
         present_today = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_at IS NOT NULL"),
+            text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_at IS NOT NULL AND COALESCE(anulled,0)=0"),
             {"today": today}
         ).scalar() or 0
         absent_today = fetch_all(conn,
@@ -2179,30 +2192,28 @@ def monitor(request: Request):
             WHERE e.estado = 'Activo'
               AND NOT EXISTS (
                 SELECT 1 FROM attendance a
-                WHERE a.employee_id = e.id AND a.shift_date = :today
+                WHERE a.employee_id = e.id AND a.shift_date = :today AND COALESCE(a.anulled,0)=0
               )
             ORDER BY e.area, e.nombre
             """,
             {"today": today}
         )
         absent_count = len(absent_today)
-        late_today = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_status IN ('Tarde', 'Retardo')"),
-            {"today": today}
-        ).scalar() or 0
-        extra_today = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND exit_status = 'Extra'"),
-            {"today": today}
-        ).scalar() or 0
+        day_stats = period_attendance_stats(conn, today_date, today_date)
+        month_stats = period_attendance_stats(conn, month_start, month_end)
+        year_stats = period_attendance_stats(conn, year_start, year_end)
+        period_stats = period_attendance_stats(conn, start, end)
+        late_today = day_stats["retardos"]
+        extra_today = day_stats["extras"]
         vehicles_inside = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE exit_at IS NULL AND vehicle_entered = 1")
+            text("SELECT COUNT(*) FROM attendance WHERE exit_at IS NULL AND vehicle_entered = 1 AND COALESCE(anulled,0)=0")
         ).scalar() or 0
         inside = fetch_all(conn,
             """
             SELECT a.*, e.nombre, e.area, e.puesto
             FROM attendance a
             JOIN employees e ON e.id = a.employee_id
-            WHERE a.exit_at IS NULL
+            WHERE a.exit_at IS NULL AND COALESCE(a.anulled,0)=0
             ORDER BY a.entry_at DESC
             """
         )
@@ -2212,6 +2223,7 @@ def monitor(request: Request):
             FROM attendance a
             JOIN employees e ON e.id = a.employee_id
             WHERE a.shift_date = :today
+              AND COALESCE(a.anulled,0)=0
               AND (a.entry_status IN ('Tarde', 'Retardo')
                    OR a.exit_status IN ('Salida temprana', 'Extra')
                    OR a.incident != ''
@@ -2221,6 +2233,17 @@ def monitor(request: Request):
             """,
             {"today": today}
         )
+        ranking_rows = employee_period_rows(conn, start, end)
+    ranking_retardos_dash = sorted(
+        [r for r in ranking_rows if int(r.get("retardos") or 0) > 0 or int(r.get("min_retardo") or 0) > 0],
+        key=lambda r: (int(r.get("min_retardo") or 0), int(r.get("retardos") or 0), str(r.get("nombre") or "")),
+        reverse=True,
+    )[:8]
+    ranking_puntuales = sorted(
+        [r for r in ranking_rows if int(r.get("registros") or 0) > 0 and int(r.get("retardos") or 0) == 0 and int(r.get("faltas") or 0) == 0],
+        key=lambda r: (int(r.get("registros") or 0), -int(r.get("salidas_tempranas") or 0), str(r.get("nombre") or "")),
+        reverse=True,
+    )[:8]
     return templates.TemplateResponse(
         "monitor.html",
         {
@@ -2234,6 +2257,16 @@ def monitor(request: Request):
             "absent_today": absent_today,
             "inside": inside,
             "incidents": incidents,
+            "day_stats": day_stats,
+            "month_stats": month_stats,
+            "year_stats": year_stats,
+            "period_stats": period_stats,
+            "period": period,
+            "period_label": period_label,
+            "start": start,
+            "end": end,
+            "ranking_retardos_dash": ranking_retardos_dash,
+            "ranking_puntuales": ranking_puntuales,
         }
     )
 
@@ -2629,41 +2662,216 @@ def week_bounds(week_start: Optional[str] = None):
     return start, end
 
 
+def safe_date(value: Optional[str], fallback: date) -> date:
+    try:
+        return date.fromisoformat(as_text(value))
+    except Exception:
+        return fallback
+
+
+def month_bounds(base: Optional[str] = None):
+    today = now_mx().date()
+    d = safe_date(base, today)
+    start = d.replace(day=1)
+    if d.month == 12:
+        next_month = d.replace(year=d.year + 1, month=1, day=1)
+    else:
+        next_month = d.replace(month=d.month + 1, day=1)
+    end = next_month - timedelta(days=1)
+    if start <= today <= end:
+        end = today
+    return start, end
+
+
+def year_bounds(base: Optional[str] = None):
+    today = now_mx().date()
+    d = safe_date(base, today)
+    start = date(d.year, 1, 1)
+    end = date(d.year, 12, 31)
+    if d.year == today.year:
+        end = today
+    return start, end
+
+
+def resolve_period_range(period: str = "week", fecha: Optional[str] = None, fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None, semana: Optional[str] = None):
+    today = now_mx().date()
+    period = (period or "week").lower()
+    if semana and not fecha_inicio and period in {"week", "semana"}:
+        fecha_inicio = semana
+    if period in {"day", "dia", "día"}:
+        start = safe_date(fecha or fecha_inicio, today)
+        end = start
+        label = f"Día {start.isoformat()}"
+    elif period in {"month", "mes"}:
+        start, end = month_bounds(fecha or fecha_inicio)
+        label = f"Mes {start.strftime('%m/%Y')}"
+    elif period in {"year", "ano", "año"}:
+        start, end = year_bounds(fecha or fecha_inicio)
+        label = f"Año {start.year}"
+    elif period in {"range", "rango"}:
+        start = safe_date(fecha_inicio, today)
+        end = safe_date(fecha_fin, start)
+        if end < start:
+            start, end = end, start
+        label = f"Rango {start.isoformat()} a {end.isoformat()}"
+    else:
+        start, end = week_bounds(fecha_inicio or fecha or semana)
+        label = f"Semana {start.isoformat()} a {end.isoformat()}"
+        period = "week"
+    # No proyectamos faltas al futuro. Bastante raro es el presente.
+    if end > today:
+        end = today
+    return period, start, end, label
+
+
+def iter_dates(start: date, end: date):
+    current = start
+    while current <= end:
+        yield current
+        current += timedelta(days=1)
+
+
+def active_employee_rows(conn: Connection, area: str = "", turno: str = ""):
+    params = {}
+    filters = ["estado='Activo'"]
+    if area:
+        filters.append("area=:area")
+        params["area"] = area
+    if turno:
+        filters.append("turno=:turno")
+        params["turno"] = turno
+    return fetch_all(conn, f"SELECT id, nombre, area, puesto, turno FROM employees WHERE {' AND '.join(filters)} ORDER BY nombre", params)
+
+
+def absence_map(conn: Connection, start: date, end: date, area: str = "", turno: str = ""):
+    employees = active_employee_rows(conn, area, turno)
+    by_emp = {e["id"]: 0 for e in employees}
+    total = 0
+    if not employees:
+        return by_emp, total
+    for d in iter_dates(start, end):
+        # Por ahora usamos lunes-viernes como regla operativa general. Los turnos específicos se pueden afinar después sin meter otro monstruo.
+        if d.weekday() >= 5:
+            continue
+        params = {"fecha": d.isoformat()}
+        attendance_ids = {r["employee_id"] for r in fetch_all(conn, "SELECT DISTINCT employee_id FROM attendance WHERE shift_date=:fecha AND COALESCE(anulled,0)=0", params)}
+        for emp in employees:
+            if emp["id"] not in attendance_ids:
+                by_emp[emp["id"]] += 1
+                total += 1
+    return by_emp, total
+
+
+def period_attendance_stats(conn: Connection, start: date, end: date, area: str = "", turno: str = ""):
+    params = {"start": start.isoformat(), "end": end.isoformat()}
+    joins = ""
+    filters = ["a.shift_date >= :start", "a.shift_date <= :end", "COALESCE(a.anulled,0)=0"]
+    if area or turno:
+        joins = "JOIN employees e ON e.id=a.employee_id"
+    if area:
+        filters.append("e.area=:area")
+        params["area"] = area
+    if turno:
+        filters.append("a.turno=:turno")
+        params["turno"] = turno
+    where = " AND ".join(filters)
+    stats = {
+        "registros": conn.execute(text(f"SELECT COUNT(*) FROM attendance a {joins} WHERE {where}"), params).scalar() or 0,
+        "retardos": conn.execute(text(f"SELECT COUNT(*) FROM attendance a {joins} WHERE {where} AND a.entry_status IN ('Tarde','Retardo')"), params).scalar() or 0,
+        "min_retardo": conn.execute(text(f"SELECT COALESCE(SUM(a.late_minutes),0) FROM attendance a {joins} WHERE {where} AND a.entry_status IN ('Tarde','Retardo')"), params).scalar() or 0,
+        "tempranas": conn.execute(text(f"SELECT COUNT(*) FROM attendance a {joins} WHERE {where} AND a.exit_status='Salida temprana'"), params).scalar() or 0,
+        "min_temprano": conn.execute(text(f"SELECT COALESCE(SUM(a.early_minutes),0) FROM attendance a {joins} WHERE {where} AND a.exit_status='Salida temprana'"), params).scalar() or 0,
+        "extras": conn.execute(text(f"SELECT COUNT(*) FROM attendance a {joins} WHERE {where} AND a.exit_status='Extra'"), params).scalar() or 0,
+        "min_extra": conn.execute(text(f"SELECT COALESCE(SUM(a.extra_minutes),0) FROM attendance a {joins} WHERE {where} AND a.exit_status='Extra'"), params).scalar() or 0,
+    }
+    _, faltas = absence_map(conn, start, end, area, turno)
+    stats["faltas"] = faltas
+    return stats
+
+
+def employee_period_rows(conn: Connection, start: date, end: date, area: str = "", turno: str = ""):
+    params = {"start": start.isoformat(), "end": end.isoformat()}
+    filters = ["a.shift_date >= :start", "a.shift_date <= :end", "COALESCE(a.anulled,0)=0"]
+    emp_filters = ["e.estado='Activo'"]
+    if area:
+        emp_filters.append("e.area=:area")
+        params["area"] = area
+    if turno:
+        filters.append("a.turno=:turno")
+        emp_filters.append("e.turno=:turno")
+        params["turno"] = turno
+    where_att = " AND ".join(filters)
+    where_emp = " AND ".join(emp_filters)
+    rows = fetch_all(conn, f"""
+        SELECT e.id AS employee_id, e.nombre, e.area, e.puesto, e.turno AS turno_empleado,
+               COUNT(a.id) AS registros,
+               SUM(CASE WHEN a.entry_status IN ('Tarde','Retardo') THEN 1 ELSE 0 END) AS retardos,
+               SUM(COALESCE(a.late_minutes,0)) AS min_retardo,
+               SUM(CASE WHEN a.exit_status = 'Salida temprana' THEN 1 ELSE 0 END) AS salidas_tempranas,
+               SUM(COALESCE(a.early_minutes,0)) AS min_temprano,
+               SUM(CASE WHEN a.exit_status = 'Extra' THEN 1 ELSE 0 END) AS extras,
+               SUM(COALESCE(a.extra_minutes,0)) AS min_extra,
+               SUM(CASE WHEN a.provisional_exit = 1 THEN 1 ELSE 0 END) AS salidas_provisionales,
+               SUM(CASE WHEN a.review_required = 1 THEN 1 ELSE 0 END) AS pendientes_revision,
+               SUM(CASE WHEN a.exit_at IS NULL THEN 1 ELSE 0 END) AS abiertas,
+               SUM(CASE WHEN a.anulled = 1 THEN 1 ELSE 0 END) AS anulados
+        FROM employees e
+        LEFT JOIN attendance a ON a.employee_id=e.id AND {where_att}
+        WHERE {where_emp}
+        GROUP BY e.id, e.nombre, e.area, e.puesto, e.turno
+        ORDER BY min_retardo DESC, retardos DESC, e.nombre
+    """, params)
+    faltas_by_employee, _ = absence_map(conn, start, end, area, turno)
+    for r in rows:
+        r["turno"] = r.get("turno_empleado") or ""
+        r["faltas"] = faltas_by_employee.get(r["employee_id"], 0)
+    return rows
+
+
+def compute_worked_minutes(entry_at: str, exit_at: str, scheduled_entry_at: str, scheduled_exit_at: str, lunch_taken: str = "", exit_status_value: str = "") -> tuple[int, str, str]:
+    entry_dt = parse_dt(entry_at or "")
+    exit_dt = parse_dt(exit_at or "")
+    scheduled_entry = parse_dt(scheduled_entry_at or "")
+    scheduled_exit = parse_dt(scheduled_exit_at or "")
+    if not entry_dt or not exit_dt or not scheduled_entry or not scheduled_exit:
+        return 0, as_text(lunch_taken).upper() or "", "Faltan fechas para calcular"
+    start_dt = max(entry_dt, scheduled_entry)
+    end_dt = min(exit_dt, scheduled_exit)
+    base = max(0, int((end_dt - start_dt).total_seconds() // 60))
+    lunch = as_text(lunch_taken).upper()
+    note = ""
+    if exit_status_value == "Salida temprana":
+        if lunch == "SI":
+            base = max(0, base - 60)
+        elif lunch == "NO":
+            pass
+        else:
+            note = "Comida no definida en salida temprana"
+    else:
+        if not lunch:
+            lunch = "SI"
+        if lunch == "SI":
+            base = max(0, base - 60)
+    return base, lunch, note
+
+
 @app.get("/reportes/semanal", response_class=HTMLResponse)
-def reporte_semanal_page(request: Request, semana: Optional[str] = None, area: str = "", turno: str = ""):
+def reporte_semanal_page(
+    request: Request,
+    semana: Optional[str] = None,
+    period: str = "week",
+    fecha: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    area: str = "",
+    turno: str = "",
+):
     admin_user = require_admin_page(request)
     if not admin_user:
         return admin_login_redirect(request)
-    start, end = week_bounds(semana)
-    params = {"start": start.isoformat(), "end": end.isoformat()}
-    filters = ["a.shift_date >= :start", "a.shift_date <= :end"]
-    if area:
-        filters.append("e.area = :area")
-        params["area"] = area
-    if turno:
-        filters.append("a.turno = :turno")
-        params["turno"] = turno
-    where = " AND ".join(filters)
+    period, start, end, period_label = resolve_period_range(period, fecha, fecha_inicio, fecha_fin, semana)
     with engine.begin() as conn:
-        rows = fetch_all(conn, f"""
-            SELECT e.id AS employee_id, e.nombre, e.area, COALESCE(a.turno, e.turno) AS turno,
-                   COUNT(a.id) AS registros,
-                   SUM(CASE WHEN a.entry_status IN ('Tarde','Retardo') THEN 1 ELSE 0 END) AS retardos,
-                   SUM(COALESCE(a.late_minutes,0)) AS min_retardo,
-                   SUM(CASE WHEN a.exit_status = 'Salida temprana' THEN 1 ELSE 0 END) AS salidas_tempranas,
-                   SUM(COALESCE(a.early_minutes,0)) AS min_temprano,
-                   SUM(CASE WHEN a.exit_status = 'Extra' THEN 1 ELSE 0 END) AS extras,
-                   SUM(COALESCE(a.extra_minutes,0)) AS min_extra,
-                   SUM(CASE WHEN a.provisional_exit = 1 THEN 1 ELSE 0 END) AS salidas_provisionales,
-                   SUM(CASE WHEN a.review_required = 1 THEN 1 ELSE 0 END) AS pendientes_revision,
-                   SUM(CASE WHEN a.exit_at IS NULL THEN 1 ELSE 0 END) AS abiertas,
-                   SUM(CASE WHEN a.anulled = 1 THEN 1 ELSE 0 END) AS anulados
-            FROM employees e
-            LEFT JOIN attendance a ON a.employee_id = e.id AND {where}
-            WHERE e.estado = 'Activo'
-            GROUP BY e.id, e.nombre, e.area, COALESCE(a.turno, e.turno)
-            ORDER BY min_retardo DESC, retardos DESC, e.nombre
-        """, params)
+        rows = employee_period_rows(conn, start, end, area, turno)
         areas = fetch_all(conn, "SELECT DISTINCT area FROM employees WHERE area != '' ORDER BY area")
         turnos = fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1 ORDER BY name")
     ranking_retardos = [r for r in rows if int(r.get("retardos") or 0) > 0 or int(r.get("min_retardo") or 0) > 0]
@@ -2672,68 +2880,64 @@ def reporte_semanal_page(request: Request, semana: Optional[str] = None, area: s
         key=lambda r: (int(r.get("min_retardo") or 0), int(r.get("retardos") or 0), str(r.get("nombre") or "")),
         reverse=True,
     )[:10]
+    ranking_puntuales = [r for r in rows if int(r.get("registros") or 0) > 0 and int(r.get("retardos") or 0) == 0 and int(r.get("faltas") or 0) == 0]
+    ranking_puntuales = sorted(
+        ranking_puntuales,
+        key=lambda r: (int(r.get("registros") or 0), -int(r.get("salidas_tempranas") or 0), str(r.get("nombre") or "")),
+        reverse=True,
+    )[:10]
     totals = {
         "retardos": sum(int(r.get("retardos") or 0) for r in rows),
         "min_retardo": sum(int(r.get("min_retardo") or 0) for r in rows),
+        "faltas": sum(int(r.get("faltas") or 0) for r in rows),
+        "tempranas": sum(int(r.get("salidas_tempranas") or 0) for r in rows),
+        "min_temprano": sum(int(r.get("min_temprano") or 0) for r in rows),
         "extras": sum(int(r.get("extras") or 0) for r in rows),
         "min_extra": sum(int(r.get("min_extra") or 0) for r in rows),
         "pendientes": sum(int(r.get("pendientes_revision") or 0) for r in rows),
     }
+    qs = f"period={period}&fecha_inicio={start.isoformat()}&fecha_fin={end.isoformat()}&area={quote(area)}&turno={quote(turno)}"
     return templates.TemplateResponse("reporte_semanal.html", {
         "request": request,
         "rows": rows,
         "ranking_retardos": ranking_retardos,
+        "ranking_puntuales": ranking_puntuales,
         "start": start,
         "end": end,
+        "period": period,
+        "period_label": period_label,
         "areas": areas,
         "turnos": turnos,
         "area": area,
         "turno": turno,
         "totals": totals,
+        "excel_query": qs,
     })
 
 
 @app.get("/reportes/semanal.xlsx")
-def reporte_semanal_excel(request: Request, semana: Optional[str] = None, area: str = "", turno: str = ""):
+def reporte_semanal_excel(
+    request: Request,
+    semana: Optional[str] = None,
+    period: str = "week",
+    fecha: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    area: str = "",
+    turno: str = "",
+):
     require_rh_http(request)
-    start, end = week_bounds(semana)
-    params = {"start": start.isoformat(), "end": end.isoformat()}
-    filters = ["a.shift_date >= :start", "a.shift_date <= :end"]
-    if area:
-        filters.append("e.area = :area")
-        params["area"] = area
-    if turno:
-        filters.append("a.turno = :turno")
-        params["turno"] = turno
-    where = " AND ".join(filters)
+    period, start, end, period_label = resolve_period_range(period, fecha, fecha_inicio, fecha_fin, semana)
     with engine.begin() as conn:
-        rows = fetch_all(conn, f"""
-            SELECT e.id AS employee_id, e.nombre, e.area, COALESCE(a.turno, e.turno) AS turno,
-                   COUNT(a.id) AS registros,
-                   SUM(CASE WHEN a.entry_status IN ('Tarde','Retardo') THEN 1 ELSE 0 END) AS retardos,
-                   SUM(COALESCE(a.late_minutes,0)) AS min_retardo,
-                   SUM(CASE WHEN a.exit_status = 'Salida temprana' THEN 1 ELSE 0 END) AS salidas_tempranas,
-                   SUM(COALESCE(a.early_minutes,0)) AS min_temprano,
-                   SUM(CASE WHEN a.exit_status = 'Extra' THEN 1 ELSE 0 END) AS extras,
-                   SUM(COALESCE(a.extra_minutes,0)) AS min_extra,
-                   SUM(CASE WHEN a.provisional_exit = 1 THEN 1 ELSE 0 END) AS salidas_provisionales,
-                   SUM(CASE WHEN a.review_required = 1 THEN 1 ELSE 0 END) AS pendientes_revision,
-                   SUM(CASE WHEN a.exit_at IS NULL THEN 1 ELSE 0 END) AS abiertas,
-                   SUM(CASE WHEN a.anulled = 1 THEN 1 ELSE 0 END) AS anulados
-            FROM employees e
-            LEFT JOIN attendance a ON a.employee_id = e.id AND {where}
-            WHERE e.estado = 'Activo'
-            GROUP BY e.id, e.nombre, e.area, COALESCE(a.turno, e.turno)
-            ORDER BY min_retardo DESC, retardos DESC, e.nombre
-        """, params)
+        rows = employee_period_rows(conn, start, end, area, turno)
     wb = Workbook()
     ws = wb.active
-    ws.title = "Semanal"
-    headers = ["ID", "Empleado", "Área", "Turno", "Registros", "Retardos", "Min retardo", "Salidas tempranas", "Min temprano", "Extras", "Min extra", "Salidas provisionales", "Pendientes revisión", "Abiertas", "Anulados"]
+    ws.title = "Acumulado"
+    headers = ["ID", "Empleado", "Área", "Turno", "Registros", "Faltas", "Retardos", "Min retardo", "Salidas tempranas", "Min temprano", "Extras", "Min extra", "Salidas provisionales", "Pendientes revisión", "Abiertas", "Anulados"]
     ws.append(headers)
     for r in rows:
-        ws.append([r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), r.get("registros") or 0, r.get("retardos") or 0, r.get("min_retardo") or 0, r.get("salidas_tempranas") or 0, r.get("min_temprano") or 0, r.get("extras") or 0, r.get("min_extra") or 0, r.get("salidas_provisionales") or 0, r.get("pendientes_revision") or 0, r.get("abiertas") or 0, r.get("anulados") or 0])
-    style_worksheet(ws, f"Reporte semanal {start.isoformat()} a {end.isoformat()}")
+        ws.append([r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), r.get("registros") or 0, r.get("faltas") or 0, r.get("retardos") or 0, r.get("min_retardo") or 0, r.get("salidas_tempranas") or 0, r.get("min_temprano") or 0, r.get("extras") or 0, r.get("min_extra") or 0, r.get("salidas_provisionales") or 0, r.get("pendientes_revision") or 0, r.get("abiertas") or 0, r.get("anulados") or 0])
+    style_worksheet(ws, f"Reporte acumulado {period_label}")
 
     ranking = [r for r in rows if int(r.get("retardos") or 0) > 0 or int(r.get("min_retardo") or 0) > 0]
     ranking = sorted(
@@ -2742,16 +2946,23 @@ def reporte_semanal_excel(request: Request, semana: Optional[str] = None, area: 
         reverse=True,
     )
     ws_rank = wb.create_sheet("Ranking retardos")
-    ws_rank.append(["Lugar", "ID", "Empleado", "Área", "Turno", "Retardos", "Min retardo", "Promedio min/retardo", "Registros"])
+    ws_rank.append(["Lugar", "ID", "Empleado", "Área", "Turno", "Retardos", "Min retardo", "Promedio min/retardo", "Registros", "Faltas"])
     for idx, r in enumerate(ranking, start=1):
         retardos = int(r.get("retardos") or 0)
         min_retardo = int(r.get("min_retardo") or 0)
         promedio = round(min_retardo / retardos, 2) if retardos else 0
-        ws_rank.append([idx, r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), retardos, min_retardo, promedio, r.get("registros") or 0])
+        ws_rank.append([idx, r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), retardos, min_retardo, promedio, r.get("registros") or 0, r.get("faltas") or 0])
     style_worksheet(ws_rank, f"Ranking de retardos {start.isoformat()} a {end.isoformat()}")
 
-    return workbook_response(wb, f"reporte_semanal_{start.isoformat()}_{end.isoformat()}.xlsx")
+    punctual = [r for r in rows if int(r.get("registros") or 0) > 0 and int(r.get("retardos") or 0) == 0 and int(r.get("faltas") or 0) == 0]
+    punctual = sorted(punctual, key=lambda r: (int(r.get("registros") or 0), -int(r.get("salidas_tempranas") or 0), str(r.get("nombre") or "")), reverse=True)
+    ws_p = wb.create_sheet("Ranking puntuales")
+    ws_p.append(["Lugar", "ID", "Empleado", "Área", "Turno", "Registros", "Retardos", "Faltas", "Salidas tempranas"])
+    for idx, r in enumerate(punctual, start=1):
+        ws_p.append([idx, r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), r.get("registros") or 0, r.get("retardos") or 0, r.get("faltas") or 0, r.get("salidas_tempranas") or 0])
+    style_worksheet(ws_p, f"Ranking de puntualidad {start.isoformat()} a {end.isoformat()}")
 
+    return workbook_response(wb, f"reporte_acumulado_{start.isoformat()}_{end.isoformat()}.xlsx")
 
 
 @app.get("/rh", response_class=HTMLResponse)
@@ -3704,6 +3915,58 @@ def exportar_general_excel(request: Request, fecha_inicio: Optional[str] = None,
     filename = f"reporte_general_{fecha_inicio or 'todo'}_{fecha_fin or 'todo'}_{now_mx().strftime('%Y%m%d_%H%M')}.xlsx"
     return workbook_response(wb, filename)
 
+
+@app.get("/exportar/nomina.xlsx")
+def exportar_nomina_excel(request: Request, fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None):
+    require_admin_http(request)
+    today = now_mx().date()
+    start = safe_date(fecha_inicio, today.replace(day=1))
+    end = safe_date(fecha_fin, today)
+    if end < start:
+        start, end = end, start
+    with engine.begin() as conn:
+        employees = active_employee_rows(conn)
+        faltas_by_employee, _ = absence_map(conn, start, end)
+        records = fetch_all(conn, """
+            SELECT a.*, e.nombre, e.area, e.puesto
+            FROM attendance a
+            JOIN employees e ON e.id=a.employee_id
+            WHERE a.shift_date >= :start AND a.shift_date <= :end AND COALESCE(a.anulled,0)=0
+            ORDER BY e.nombre, a.shift_date
+        """, {"start": start.isoformat(), "end": end.isoformat()})
+
+    by_emp = {e["id"]: {"id": e["id"], "nombre": e["nombre"], "area": e.get("area") or "", "puesto": e.get("puesto") or "", "min_incidencia": 0, "faltas": faltas_by_employee.get(e["id"], 0), "worked": 0, "retardos": 0, "tempranas": 0, "pendientes_comida": 0} for e in employees}
+    detail_rows = []
+    for r in records:
+        emp_id = r["employee_id"]
+        if emp_id not in by_emp:
+            continue
+        late = int(r.get("late_minutes") or 0)
+        early = int(r.get("early_minutes") or 0)
+        worked, lunch, note = compute_worked_minutes(r.get("entry_at"), r.get("exit_at"), r.get("scheduled_entry_at"), r.get("scheduled_exit_at"), r.get("lunch_taken") or "", r.get("exit_status") or "")
+        by_emp[emp_id]["min_incidencia"] += late + early
+        by_emp[emp_id]["worked"] += worked
+        by_emp[emp_id]["retardos"] += 1 if r.get("entry_status") in ("Tarde", "Retardo") else 0
+        by_emp[emp_id]["tempranas"] += 1 if r.get("exit_status") == "Salida temprana" else 0
+        if note:
+            by_emp[emp_id]["pendientes_comida"] += 1
+        detail_rows.append([r.get("shift_date"), emp_id, r.get("nombre"), r.get("turno"), short_datetime(r.get("entry_at")), short_datetime(r.get("exit_at")), r.get("entry_status") or "", r.get("exit_status") or "", late, early, late+early, lunch, worked, round(worked/60,2), note])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Nomina"
+    ws.append(["ID", "Nombre completo", "Área", "Puesto", "Min retardo + salida temprana", "Faltas", "Tiempo total trabajado (min)", "Tiempo total trabajado (h)", "Retardos", "Salidas tempranas", "Pendientes comida"] )
+    for item in sorted(by_emp.values(), key=lambda x: x["nombre"]):
+        ws.append([item["id"], item["nombre"], item["area"], item["puesto"], item["min_incidencia"], item["faltas"], item["worked"], round(item["worked"]/60,2), item["retardos"], item["tempranas"], item["pendientes_comida"]])
+    style_worksheet(ws, f"Exportación nómina {start.isoformat()} a {end.isoformat()}")
+    ws2 = wb.create_sheet("Detalle")
+    ws2.append(["Fecha turno", "ID", "Nombre", "Turno", "Entrada", "Salida", "Estado entrada", "Estado salida", "Min retardo", "Min salida temprana", "Min incidencia", "Comida tomada", "Min trabajados", "Horas trabajadas", "Observación"] )
+    for row in detail_rows:
+        ws2.append(row)
+    style_worksheet(ws2, "Detalle para nómina")
+    return workbook_response(wb, f"nomina_{start.isoformat()}_{end.isoformat()}.xlsx")
+
+
 def make_qr_core(employee_id: str, size: int = 900) -> Image.Image:
     return qrcode.make(employee_id).convert("RGB").resize((size, size))
 
@@ -4060,6 +4323,10 @@ def api_scan(request: Request, raw_code: str):
         )
         config = get_shift_config(conn, emp.get("turno") or "Día")
         if open_att:
+            entry_dt_open = parse_dt(open_att.get("entry_at") or "")
+            if entry_dt_open and (dt - entry_dt_open).total_seconds() < MIN_EXIT_AFTER_ENTRY_MINUTES * 60:
+                remaining = MIN_EXIT_AFTER_ENTRY_MINUTES - int((dt - entry_dt_open).total_seconds() // 60)
+                return JSONResponse(status_code=409, content={"ok": False, "message": f"Entrada recién registrada. La salida solo puede capturarse mínimo {MIN_EXIT_AFTER_ENTRY_MINUTES} minutos después. Espera aprox. {max(1, remaining)} min."})
             exit_config = get_shift_config(conn, open_att.get("turno") or emp.get("turno") or "Día")
             preview = evaluate_exit(exit_config, open_att["shift_date"], dt)
             preview["movement"] = "salida"
@@ -4104,6 +4371,10 @@ def api_empleado(request: Request, employee_id: str):
         )
         config = get_shift_config(conn, emp.get("turno") or "Día")
         if open_att:
+            entry_dt_open = parse_dt(open_att.get("entry_at") or "")
+            if entry_dt_open and (dt - entry_dt_open).total_seconds() < MIN_EXIT_AFTER_ENTRY_MINUTES * 60:
+                remaining = MIN_EXIT_AFTER_ENTRY_MINUTES - int((dt - entry_dt_open).total_seconds() // 60)
+                return JSONResponse(status_code=409, content={"ok": False, "message": f"Entrada recién registrada. La salida solo puede capturarse mínimo {MIN_EXIT_AFTER_ENTRY_MINUTES} minutos después. Espera aprox. {max(1, remaining)} min."})
             exit_config = get_shift_config(conn, open_att.get("turno") or emp.get("turno") or "Día")
             preview = evaluate_exit(exit_config, open_att["shift_date"], dt)
             preview["movement"] = "salida"
@@ -4134,6 +4405,7 @@ async def api_registro(
     vehiculo: str = Form("0"),
     motivo_retardo: str = Form(""),
     motivo_salida_temprana: str = Form(""),
+    comida_tomada: str = Form(""),
     observaciones: str = Form(""),
     foto_frontal: Optional[UploadFile] = File(None),
     foto_cajuela: Optional[UploadFile] = File(None),
@@ -4237,10 +4509,20 @@ async def api_registro(
                 return JSONResponse(status_code=400, content={"ok": False, "message": "No hay entrada abierta para registrar salida"})
 
             config = get_shift_config(conn, open_att["turno"])
+            entry_dt_open = parse_dt(open_att.get("entry_at") or "")
+            if entry_dt_open and (dt - entry_dt_open).total_seconds() < MIN_EXIT_AFTER_ENTRY_MINUTES * 60:
+                remaining = MIN_EXIT_AFTER_ENTRY_MINUTES - int((dt - entry_dt_open).total_seconds() // 60)
+                return JSONResponse(status_code=409, content={"ok": False, "message": f"Entrada recién registrada. La salida solo puede capturarse mínimo {MIN_EXIT_AFTER_ENTRY_MINUTES} minutos después. Espera aprox. {max(1, remaining)} min."})
             eval_data = evaluate_exit(config, open_att["shift_date"], dt)
             status = eval_data["status"]
+            lunch_value = as_text(comida_tomada).upper()
             if status == "Salida temprana" and not motivo_salida_temprana.strip():
                 return JSONResponse(status_code=400, content={"ok": False, "message": "Salida temprana: el motivo es obligatorio"})
+            if status == "Salida temprana" and lunch_value not in {"SI", "NO"}:
+                return JSONResponse(status_code=400, content={"ok": False, "message": "Salida temprana: debes indicar si tomó la hora de comida"})
+            if status != "Salida temprana" and not lunch_value:
+                lunch_value = "SI"
+            worked_minutes, lunch_value, payroll_note = compute_worked_minutes(open_att.get("entry_at"), ts, eval_data.get("scheduled_entry_at"), eval_data.get("scheduled_exit_at"), lunch_value, status)
 
             conn.execute(
                 text(
@@ -4262,6 +4544,8 @@ async def api_registro(
                         extra_after_minutes=:extra_after_minutes,
                         early_minutes=:early_minutes,
                         extra_minutes=:extra_minutes,
+                        lunch_taken=:lunch_taken,
+                        worked_minutes=:worked_minutes,
                         updated_at=:updated_at,
                         incident=:incident
                     WHERE id=:id
@@ -4276,6 +4560,8 @@ async def api_registro(
                     "vehicle_trunk_exit": trunk_path,
                     "updated_at": ts,
                     "incident": observaciones.strip() or open_att["incident"],
+                    "lunch_taken": lunch_value,
+                    "worked_minutes": worked_minutes,
                     "id": open_att["id"],
                     **eval_data,
                 }
@@ -4286,8 +4572,8 @@ async def api_registro(
             if status == "Extra":
                 msg += f" ({eval_data.get('extra_minutes', 0)} min después de salida programada)"
             if status == "Salida temprana":
-                msg += f" ({eval_data.get('early_minutes', 0)} min)"
-            return {"ok": True, "message": msg, "record_id": open_att["id"], "status": status, "evaluation": eval_data}
+                msg += f" ({eval_data.get('early_minutes', 0)} min; comida: {lunch_value})"
+            return {"ok": True, "message": msg, "record_id": open_att["id"], "status": status, "evaluation": eval_data, "worked_minutes": worked_minutes, "lunch_taken": lunch_value}
 
     return JSONResponse(status_code=400, content={"ok": False, "message": "Movimiento inválido"})
 

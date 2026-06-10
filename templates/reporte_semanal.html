@@ -2,76 +2,63 @@
 {% block content %}
 <section class="page-head row-head">
   <div>
-    <h2>Reporte semanal</h2>
-    <p>Acumulado de retardos, salidas tempranas, extras y pendientes. Ya no es “llegó tarde una vez”; ahora vemos patrón.</p>
+    <h2>Reporte acumulado</h2>
+    <p>Consulta por día, semana, año o rango. Incluye retardos, faltas, salidas tempranas, extras y rankings.</p>
   </div>
   <form class="actions" method="get" action="/reportes/semanal">
-    <input type="date" name="semana" value="{{ start.isoformat() }}">
+    <select name="period">
+      <option value="day" {% if period=='day' %}selected{% endif %}>Día</option>
+      <option value="week" {% if period=='week' %}selected{% endif %}>Semana</option>
+      <option value="year" {% if period=='year' %}selected{% endif %}>Año</option>
+      <option value="range" {% if period=='range' %}selected{% endif %}>Rango</option>
+    </select>
+    <input type="date" name="fecha_inicio" value="{{ start.isoformat() }}">
+    <input type="date" name="fecha_fin" value="{{ end.isoformat() }}">
     <select name="area"><option value="">Todas las áreas</option>{% for a in areas %}<option value="{{ a.area }}" {% if area==a.area %}selected{% endif %}>{{ a.area }}</option>{% endfor %}</select>
     <select name="turno"><option value="">Todos los turnos</option>{% for t in turnos %}<option value="{{ t.name }}" {% if turno==t.name %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select>
     <button class="btn primary" type="submit">Ver</button>
-    <a class="btn secondary" href="/reportes/semanal.xlsx?semana={{ start.isoformat() }}&area={{ area }}&turno={{ turno }}">Excel</a>
+    <a class="btn secondary" href="/reportes/semanal.xlsx?{{ excel_query }}">Excel</a>
   </form>
 </section>
 
 <div class="kpi-grid">
-  <div class="kpi"><small>Semana</small><strong>{{ start.strftime('%d/%m') }} - {{ end.strftime('%d/%m') }}</strong></div>
+  <div class="kpi"><small>Periodo</small><strong>{{ start.strftime('%d/%m') }} - {{ end.strftime('%d/%m') }}</strong><small>{{ period_label }}</small></div>
   <div class="kpi"><small>Retardos</small><strong>{{ totals.retardos }}</strong><small>{{ totals.min_retardo }} min</small></div>
+  <div class="kpi"><small>Faltas</small><strong>{{ totals.faltas }}</strong><small>sin registro</small></div>
+  <div class="kpi"><small>Salidas tempranas</small><strong>{{ totals.tempranas }}</strong><small>{{ totals.min_temprano }} min</small></div>
   <div class="kpi"><small>Extras</small><strong>{{ totals.extras }}</strong><small>{{ totals.min_extra }} min</small></div>
-  <div class="kpi"><small>Pendientes</small><strong>{{ totals.pendientes }}</strong><small>revisión</small></div>
 </div>
 
-
-<section class="card">
-  <div class="row-head">
-    <div>
-      <h3>Ranking de retardos</h3>
-      <p>Ordenado por minutos acumulados de retardo. La tolerancia define si cuenta como retardo; los minutos se cuentan desde la hora programada.</p>
+<section class="dashboard-grid">
+  <article class="card">
+    <h3>Ranking de retardos</h3>
+    <p class="muted tiny">Ordenado por minutos acumulados de retardo. La tolerancia define si cuenta como retardo; los minutos se cuentan desde la hora programada.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Empleado</th><th>Área</th><th>Turno</th><th>Retardos</th><th>Min retardo</th><th>Promedio</th></tr></thead>
+        <tbody>{% for r in ranking_retardos %}<tr><td><span class="badge badge-blue">{{ loop.index }}</span></td><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.area }}</td><td>{{ r.turno or '' }}</td><td>{{ r.retardos or 0 }}</td><td><strong>{{ r.min_retardo or 0 }} min</strong></td><td>{% if r.retardos %}{{ ((r.min_retardo or 0) / (r.retardos or 1)) | round(1) }} min{% else %}0{% endif %}</td></tr>{% else %}<tr><td colspan="7">Sin retardos en el periodo.</td></tr>{% endfor %}</tbody>
+      </table>
     </div>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>#</th><th>Empleado</th><th>Área</th><th>Turno</th><th>Retardos</th><th>Min retardo</th><th>Promedio</th></tr></thead>
-      <tbody>
-      {% for r in ranking_retardos %}
-        <tr>
-          <td><span class="badge badge-blue">{{ loop.index }}</span></td>
-          <td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td>
-          <td>{{ r.area }}</td>
-          <td>{{ r.turno or '' }}</td>
-          <td>{{ r.retardos or 0 }}</td>
-          <td><strong>{{ r.min_retardo or 0 }} min</strong></td>
-          <td>{% if r.retardos %}{{ ((r.min_retardo or 0) / (r.retardos or 1)) | round(1) }} min{% else %}0{% endif %}</td>
-        </tr>
-      {% else %}<tr><td colspan="7">Sin retardos en esta semana.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-  </div>
+  </article>
+
+  <article class="card">
+    <h3>Ranking de puntualidad</h3>
+    <p class="muted tiny">Trabajadores con registros en el periodo, sin retardos ni faltas.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Empleado</th><th>Área</th><th>Turno</th><th>Registros</th><th>Salidas tempranas</th></tr></thead>
+        <tbody>{% for r in ranking_puntuales %}<tr><td><span class="badge ok">{{ loop.index }}</span></td><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.area }}</td><td>{{ r.turno or '' }}</td><td>{{ r.registros or 0 }}</td><td>{{ r.salidas_tempranas or 0 }}</td></tr>{% else %}<tr><td colspan="6">Sin datos suficientes para ranking de puntualidad.</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </article>
 </section>
 
 <section class="card">
   <h3>Acumulado por empleado</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Registros</th><th>Retardos</th><th>Min retardo</th><th>Salidas tempranas</th><th>Extras</th><th>Min extra</th><th>Provisionales</th><th>Pendientes</th><th>Abiertas</th></tr></thead>
-      <tbody>
-      {% for r in rows %}
-        <tr>
-          <td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td>
-          <td>{{ r.area }}</td>
-          <td>{{ r.turno or '' }}</td>
-          <td>{{ r.registros or 0 }}</td>
-          <td>{{ r.retardos or 0 }}</td>
-          <td>{{ r.min_retardo or 0 }}</td>
-          <td>{{ r.salidas_tempranas or 0 }}</td>
-          <td>{{ r.extras or 0 }}</td>
-          <td>{{ r.min_extra or 0 }}</td>
-          <td>{{ r.salidas_provisionales or 0 }}</td>
-          <td>{{ r.pendientes_revision or 0 }}</td>
-          <td>{{ r.abiertas or 0 }}</td>
-        </tr>
-      {% else %}<tr><td colspan="12">Sin datos para esta semana.</td></tr>{% endfor %}
-      </tbody>
+      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Registros</th><th>Faltas</th><th>Retardos</th><th>Min retardo</th><th>Salidas tempranas</th><th>Min temprano</th><th>Extras</th><th>Min extra</th><th>Provisionales</th><th>Pendientes</th><th>Abiertas</th></tr></thead>
+      <tbody>{% for r in rows %}<tr><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.area }}</td><td>{{ r.turno or '' }}</td><td>{{ r.registros or 0 }}</td><td>{{ r.faltas or 0 }}</td><td>{{ r.retardos or 0 }}</td><td>{{ r.min_retardo or 0 }}</td><td>{{ r.salidas_tempranas or 0 }}</td><td>{{ r.min_temprano or 0 }}</td><td>{{ r.extras or 0 }}</td><td>{{ r.min_extra or 0 }}</td><td>{{ r.salidas_provisionales or 0 }}</td><td>{{ r.pendientes_revision or 0 }}</td><td>{{ r.abiertas or 0 }}</td></tr>{% else %}<tr><td colspan="14">Sin datos para el periodo.</td></tr>{% endfor %}</tbody>
     </table>
   </div>
 </section>

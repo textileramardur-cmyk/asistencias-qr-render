@@ -23,7 +23,7 @@
   {% if show_desktop_shell %}
   <aside class="desktop-sidebar">
     <div class="brand-block">
-      <div class="brand-mark">A</div>
+      <div class="brand-mark">MS</div>
       <div>
         <strong>MS</strong>
         <small>Control de asistencias</small>
@@ -36,7 +36,6 @@
       {% else %}
         {{ nav_link('/monitor', 'Dashboard', '◈') }}
         {{ nav_link('/retardos', 'Retardos', '◷') }}
-        {{ nav_link('/recalcular', 'Recalcular', '⟳') }}
         {{ nav_link('/reportes/semanal', 'Semanal', '▦') }}
         {{ nav_link('/rh', 'Vista RH', '○') }}
         <div class="side-label">Operación</div>
@@ -86,7 +85,6 @@
       {% elif user %}
         <a href="/monitor">Dashboard</a>
         <a href="/retardos">Retardos</a>
-        <a href="/recalcular">Recalcular</a>
         <a href="/reportes/semanal">Semanal</a>
         <a href="/configuracion">Config.</a>
         <a href="/personal">Personal</a>

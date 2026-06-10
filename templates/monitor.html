@@ -3,11 +3,11 @@
 <section class="page-head row-head dashboard-head">
   <div>
     <h2>Dashboard operativo</h2>
-    <p>Panorama ejecutivo de asistencia: presentes, retardos, extras, personal dentro e incidencias recientes.</p>
+    <p>Panorama ejecutivo de asistencia, retardos, faltas, rankings y personal dentro.</p>
   </div>
   <div class="actions">
     <a class="btn secondary" href="/retardos">Analizar retardos</a>
-    <a class="btn secondary" href="/reportes/semanal">Reporte semanal</a>
+    <a class="btn secondary" href="/reportes/semanal">Reporte por rango</a>
     <a class="btn primary" href="/exportar">Exportar Excel</a>
   </div>
 </section>
@@ -20,6 +20,38 @@
   <div class="kpi"><small>Extras hoy</small><strong>{{ extra_today }}</strong><span class="kpi-note">Salida + regla configurada</span></div>
 </div>
 
+<section class="card">
+  <div class="section-row">
+    <div>
+      <h3>Retardos y faltas acumuladas</h3>
+      <p class="muted tiny">Vista rápida por día, semana, año o rango. Los minutos de retardo se cuentan desde la entrada programada.</p>
+    </div>
+    <form method="get" action="/monitor" class="actions compact-actions">
+      <select name="period">
+        <option value="day" {% if period=='day' %}selected{% endif %}>Día</option>
+        <option value="week" {% if period=='week' %}selected{% endif %}>Semana</option>
+        <option value="year" {% if period=='year' %}selected{% endif %}>Año</option>
+        <option value="range" {% if period=='range' %}selected{% endif %}>Rango</option>
+      </select>
+      <input type="date" name="fecha_inicio" value="{{ start.isoformat() }}">
+      <input type="date" name="fecha_fin" value="{{ end.isoformat() }}">
+      <button class="btn primary" type="submit">Ver</button>
+    </form>
+  </div>
+  <div class="kpi-grid compact">
+    <div class="kpi"><small>Periodo</small><strong>{{ period_label }}</strong></div>
+    <div class="kpi"><small>Retardos</small><strong>{{ period_stats.retardos }}</strong><span class="kpi-note">{{ period_stats.min_retardo }} min</span></div>
+    <div class="kpi"><small>Faltas / sin registro</small><strong>{{ period_stats.faltas }}</strong><span class="kpi-note">Lun-vie</span></div>
+    <div class="kpi"><small>Salidas tempranas</small><strong>{{ period_stats.tempranas }}</strong><span class="kpi-note">{{ period_stats.min_temprano }} min</span></div>
+  </div>
+  <div class="kpi-grid compact">
+    <div class="kpi"><small>Hoy: retardos</small><strong>{{ day_stats.retardos }}</strong><span class="kpi-note">Faltas {{ day_stats.faltas }}</span></div>
+    <div class="kpi"><small>Mes: retardos</small><strong>{{ month_stats.retardos }}</strong><span class="kpi-note">Faltas {{ month_stats.faltas }}</span></div>
+    <div class="kpi"><small>Año: retardos</small><strong>{{ year_stats.retardos }}</strong><span class="kpi-note">Faltas {{ year_stats.faltas }}</span></div>
+    <div class="kpi"><small>Min retardo año</small><strong>{{ year_stats.min_retardo }}</strong><span class="kpi-note">minutos</span></div>
+  </div>
+</section>
+
 <section class="dashboard-grid">
   <article class="card dashboard-main-card">
     <div class="section-row">
@@ -31,9 +63,7 @@
     </div>
     <div class="table-wrap clean-table">
       <table>
-        <thead>
-          <tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Vehículo</th><th>Estado</th></tr>
-        </thead>
+        <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Vehículo</th><th>Estado</th></tr></thead>
         <tbody>
           {% for row in inside %}
           <tr>
@@ -44,9 +74,7 @@
             <td>{{ 'Sí' if row.vehicle_entered else 'No' }}</td>
             <td><span class="badge ok">Dentro</span></td>
           </tr>
-          {% else %}
-          <tr><td colspan="6">No hay personal con entrada abierta.</td></tr>
-          {% endfor %}
+          {% else %}<tr><td colspan="6">No hay personal con entrada abierta.</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -54,80 +82,35 @@
 
   <aside class="dashboard-side-stack">
     <article class="card mini-panel">
-      <h3>Accesos rápidos</h3>
-      <div class="stacked-links">
-        <a href="/vigilancia">▣ Abrir vigilancia</a>
-        <a href="/vigilantes">◆ Vigilantes activos</a>
-        <a href="/turnos">◴ Turnos y tolerancias</a>
-        <a href="/sistema">✦ Estado del sistema</a>
+      <h3>Ranking de puntualidad</h3>
+      <p class="muted tiny">Sin retardos ni faltas en el periodo seleccionado.</p>
+      <div class="table-wrap compact-table">
+        <table>
+          <thead><tr><th>#</th><th>Empleado</th><th>Reg.</th></tr></thead>
+          <tbody>{% for r in ranking_puntuales %}<tr><td>{{ loop.index }}</td><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.registros }}</td></tr>{% else %}<tr><td colspan="3">Sin ranking todavía.</td></tr>{% endfor %}</tbody>
+        </table>
       </div>
     </article>
-    <article class="card mini-panel tone-blue">
-      <h3>Regla operativa</h3>
-      <p>Vigilancia escanea. El sistema decide entrada/salida. Admin corrige. RH consulta.</p>
+    <article class="card mini-panel">
+      <h3>Ranking de retardos</h3>
+      <p class="muted tiny">Ordenado por minutos acumulados.</p>
+      <div class="table-wrap compact-table">
+        <table>
+          <thead><tr><th>#</th><th>Empleado</th><th>Min</th></tr></thead>
+          <tbody>{% for r in ranking_retardos_dash %}<tr><td>{{ loop.index }}</td><td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td><td>{{ r.min_retardo or 0 }}</td></tr>{% else %}<tr><td colspan="3">Sin retardos en el periodo.</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
     </article>
   </aside>
 </section>
 
 <section class="card">
-  <div class="section-row">
-    <div>
-      <h3>Personas que faltaron o no tienen registro hoy</h3>
-      <p class="muted tiny">Empleados activos sin asistencia registrada para la fecha actual. Revísalo con criterio: si el turno aún no empieza, no conviertas el sistema en tribunal medieval.</p>
-    </div>
-    <span class="badge warn">{{ absent_count }} sin registro</span>
-  </div>
-  <div class="table-wrap clean-table">
-    <table>
-      <thead>
-        <tr><th>ID</th><th>Empleado</th><th>Área</th><th>Puesto</th><th>Turno</th></tr>
-      </thead>
-      <tbody>
-        {% for row in absent_today %}
-        <tr>
-          <td><strong>{{ row.id }}</strong></td>
-          <td>{{ row.nombre }}</td>
-          <td>{{ row.area or '-' }}</td>
-          <td>{{ row.puesto or '-' }}</td>
-          <td>{{ row.turno or '-' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5">No hay personas activas sin registro hoy.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div class="section-row"><div><h3>Personas que faltaron o no tienen registro hoy</h3><p class="muted tiny">Empleados activos sin asistencia registrada para la fecha actual.</p></div><span class="badge warn">{{ absent_count }} sin registro</span></div>
+  <div class="table-wrap clean-table"><table><thead><tr><th>ID</th><th>Empleado</th><th>Área</th><th>Puesto</th><th>Turno</th></tr></thead><tbody>{% for row in absent_today %}<tr><td><strong>{{ row.id }}</strong></td><td>{{ row.nombre }}</td><td>{{ row.area or '-' }}</td><td>{{ row.puesto or '-' }}</td><td>{{ row.turno or '-' }}</td></tr>{% else %}<tr><td colspan="5">No hay personas activas sin registro hoy.</td></tr>{% endfor %}</tbody></table></div>
 </section>
 
 <section class="card">
-  <div class="section-row">
-    <div>
-      <h3>Incidencias de hoy</h3>
-      <p class="muted tiny">Retardos, extras, salidas tempranas y pendientes detectados únicamente en la fecha actual.</p>
-    </div>
-    <a class="btn small secondary" href="/retardos">Ver detalle</a>
-  </div>
-  <div class="table-wrap clean-table">
-    <table>
-      <thead>
-        <tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Min retardo</th><th>Min extra</th><th>Motivo</th></tr>
-      </thead>
-      <tbody>
-        {% for row in incidents %}
-        <tr>
-          <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
-          <td>{{ row.shift_date }}</td>
-          <td>{{ row.entry_status or '-' }}</td>
-          <td>{{ row.exit_status or '-' }}</td>
-          <td>{{ row.late_minutes or 0 }}</td>
-          <td>{{ row.extra_minutes or 0 }}</td>
-          <td>{{ row.late_reason or row.early_reason or row.incident or '-' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7">Sin incidencias hoy. Milagro administrativo, pero aceptémoslo.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div class="section-row"><div><h3>Incidencias de hoy</h3><p class="muted tiny">Solo fecha actual: retardos, extras, salidas tempranas y pendientes.</p></div><a class="btn small secondary" href="/retardos">Ver detalle</a></div>
+  <div class="table-wrap clean-table"><table><thead><tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Min retardo</th><th>Min extra</th><th>Motivo</th></tr></thead><tbody>{% for row in incidents %}<tr><td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td><td>{{ row.shift_date }}</td><td>{{ row.entry_status or '-' }}</td><td>{{ row.exit_status or '-' }}</td><td>{{ row.late_minutes or 0 }}</td><td>{{ row.extra_minutes or 0 }}</td><td>{{ row.late_reason or row.early_reason or row.incident or '-' }}</td></tr>{% else %}<tr><td colspan="7">Sin incidencias hoy.</td></tr>{% endfor %}</tbody></table></div>
 </section>
 {% endblock %}
