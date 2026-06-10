@@ -150,8 +150,8 @@ Reglas de importación histórica:
 
 - Nuevo módulo `/vigilantes` para crear, activar/inactivar, descargar QR y administrar códigos de cambio de turno.
 - Vigilantes iniciales:
-  - `VIG-ALTIMA-1` · Altima 1 · David · Activo.
-  - `VIG-ALTIMA-2` · Altima 2 · Pendiente · Inactivo.
+  - `VIG-MS-1` · Altima 1 · Reymundo Méndez · Activo.
+  - `VIG-MS-2` · Altima 2 · David Martinez · Activo.
 - En `/vigilancia`, primero se debe escanear un QR de vigilante. Ese vigilante queda como responsable activo hasta que otro vigilante escanee su QR.
 - Cada entrada/salida de empleado se guarda automáticamente con el vigilante activo, no con una selección manual.
 - En `/personal` se puede dar baja/reactivar trabajadores. El borrado definitivo queda solo para rol Supremo y audita la acción.
@@ -159,12 +159,12 @@ Reglas de importación histórica:
 
 ### Prueba recomendada
 1. Entrar como `Adjm`.
-2. Abrir `/vigilantes` y descargar QR de `VIG-ALTIMA-1`.
+2. Abrir `/vigilantes` y descargar QR de `VIG-MS-1`.
 3. Entrar como `Altima`.
 4. Abrir `/vigilancia`.
 5. Escanear el QR de vigilante.
 6. Escanear un QR de empleado.
-7. Verificar en `/monitor` o exportación que el registro quede ligado a `Altima 1 - David`.
+7. Verificar en `/monitor` o exportación que el registro quede ligado a `Altima 1 - Reymundo Méndez`.
 
 ## Iteración visual PC profesional
 

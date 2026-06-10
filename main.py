@@ -48,10 +48,12 @@ DEFAULT_SYSTEM_USERS = [
     {"username": "Adhm4", "password": "4dhm", "role": "RH", "display_name": "Jefa de RH"},
 ]
 
+DEFAULT_SYSTEM_PASSWORDS = {item["username"]: item["password"] for item in DEFAULT_SYSTEM_USERS}
+
 # Vigilantes semilla para cambio de turno por QR.
 DEFAULT_GUARDS = [
-    {"code": "VIG-ALTIMA-1", "alias": "Altima 1", "nombre": "David", "active": 1, "qr_activo": 1},
-    {"code": "VIG-ALTIMA-2", "alias": "Altima 2", "nombre": "Pendiente", "active": 0, "qr_activo": 1},
+    {"code": "VIG-ALTIMA-1", "alias": "Altima 1", "nombre": "Reymundo Méndez", "active": 1, "qr_activo": 1},
+    {"code": "VIG-ALTIMA-2", "alias": "Altima 2", "nombre": "David Martinez", "active": 1, "qr_activo": 1},
 ]
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -928,20 +930,23 @@ def seed_admin_user() -> None:
 
 
 def seed_guards() -> None:
-    """Crea vigilantes base y conserva cambios manuales salvo que no existan.
-    No fuerza activo/inactivo en cada arranque para no romper operación real.
-    """
+    """Crea/actualiza vigilantes base solicitados para que los QR queden correctos en Render."""
     with engine.begin() as conn:
         ts = now_mx().isoformat()
         for guard in DEFAULT_GUARDS:
             existing = get_guard(conn, guard["code"])
             if existing:
-                alias = existing.get("alias") or guard["alias"]
-                nombre = existing.get("nombre") or guard["nombre"]
+                old_display = guard_display(existing)
                 conn.execute(
-                    text("UPDATE guards SET alias=:alias, nombre=:nombre, updated_at=:updated_at WHERE code=:code"),
-                    {"code": guard["code"], "alias": alias, "nombre": nombre, "updated_at": ts},
+                    text("""
+                        UPDATE guards
+                        SET alias=:alias, nombre=:nombre, active=:active, qr_activo=:qr_activo, updated_at=:updated_at
+                        WHERE code=:code
+                    """),
+                    {"code": guard["code"], "alias": guard["alias"], "nombre": guard["nombre"], "active": guard["active"], "qr_activo": guard["qr_activo"], "updated_at": ts},
                 )
+                if old_display != f"{guard['alias']} - {guard['nombre']}":
+                    audit(conn, "guards", guard["code"], "UPDATE", "Sistema", "nombre", old_display, f"{guard['alias']} - {guard['nombre']}", "Sincronización de vigilantes base")
             else:
                 conn.execute(
                     text("""
@@ -2174,8 +2179,17 @@ def usuarios_page(request: Request):
     if not admin_user:
         return admin_login_redirect(request)
     with engine.begin() as conn:
-        rows = fetch_all(conn, "SELECT username, role, active, display_name, created_at, updated_at FROM users ORDER BY username")
-    return templates.TemplateResponse("usuarios.html", {"request": request, "users": rows, "error": ""})
+        rows_raw = fetch_all(conn, "SELECT username, role, active, display_name, created_at, updated_at FROM users ORDER BY username")
+    # Seguridad: no se guardan contraseñas reales en texto plano en la base.
+    # Solo un Supremo puede ver las claves semilla conocidas del sistema.
+    # Para usuarios personalizados, se debe restablecer la clave en lugar de "revelarla".
+    is_supremo = (admin_user.get("role") == "Supremo")
+    rows = []
+    for row in rows_raw:
+        item = dict(row)
+        item["visible_password"] = DEFAULT_SYSTEM_PASSWORDS.get(item.get("username"), "") if is_supremo else ""
+        rows.append(item)
+    return templates.TemplateResponse("usuarios.html", {"request": request, "users": rows, "error": "", "is_supremo": is_supremo})
 
 
 @app.post("/usuarios/guardar")
@@ -3303,7 +3317,7 @@ def generate_cell_card_image(emp: dict) -> Image.Image:
     font_small = load_font(28, False)
     font_tiny = load_font(24, False)
 
-    center_text(draw, (0, 76, W), "ALTIMA", font_brand, blanco)
+    center_text(draw, (0, 76, W), "MS", font_brand, blanco)
     center_text(draw, (0, 150, W), "Código personal de acceso", font_subtitle, (220, 235, 248))
 
     # Tarjeta principal
@@ -3451,7 +3465,7 @@ def generate_badge_card_image(emp: dict) -> Image.Image:
     draw.rounded_rectangle((22, 22, W-22, H-22), radius=34, fill=gris, outline=(210, 220, 235), width=3)
     draw.rounded_rectangle((22, 22, W-22, 205), radius=34, fill=azul)
     draw.rectangle((22, 145, W-22, 205), fill=azul)
-    center_text(draw, (0, 56, W), "ALTIMA", load_font(42, True), blanco)
+    center_text(draw, (0, 56, W), "MS", load_font(58, True), blanco)
     center_text(draw, (0, 112, W), "GAFETE DE ACCESO", load_font(20, False), (220, 235, 248))
 
     # QR
@@ -3518,7 +3532,7 @@ def generate_guard_qr_image(guard: dict) -> Image.Image:
     img = Image.new("RGB", (W, H), gris)
     draw = ImageDraw.Draw(img)
     draw.rectangle((0, 0, W, 210), fill=azul)
-    center_text(draw, (0, 56, W), "VIGILANTE ALTIMA", load_font(48, True), blanco)
+    center_text(draw, (0, 56, W), "VIGILANTE MS", load_font(48, True), blanco)
     center_text(draw, (0, 130, W), "Código de cambio de turno", load_font(28, False), (220, 235, 248))
     qr_img = make_qr_core(f"VIG:{guard['code']}", 650)
     img.paste(qr_img, ((W-650)//2, 270))

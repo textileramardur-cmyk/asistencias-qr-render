@@ -8,11 +8,27 @@
   <a class="btn secondary" href="/configuracion">Configuración</a>
 </section>
 
+{% if is_supremo %}
+<section class="card security-note">
+  <h3>Claves visibles para Supremo</h3>
+  <p class="muted">Por seguridad, el sistema no guarda contraseñas reales en texto plano. Aquí solo se muestran las claves base configuradas del sistema. Para usuarios personalizados, usa “Guardar usuario” para restablecer una nueva clave.</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h3>Usuarios existentes</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Usuario</th><th>Nombre visible</th><th>Rol</th><th>Estado</th><th>Actualizado</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Usuario</th>
+          <th>Nombre visible</th>
+          <th>Rol</th>
+          <th>Estado</th>
+          {% if is_supremo %}<th>Clave base</th>{% endif %}
+          <th>Actualizado</th>
+        </tr>
+      </thead>
       <tbody>
       {% for u in users %}
         <tr>
@@ -20,10 +36,19 @@
           <td>{{ u.display_name or '' }}</td>
           <td><span class="badge neutral">{{ u.role }}</span></td>
           <td><span class="badge {{ 'ok' if u.active else 'bad' }}">{{ 'Activo' if u.active else 'Inactivo' }}</span></td>
+          {% if is_supremo %}
+          <td>
+            {% if u.visible_password %}
+              <code class="secret-code">{{ u.visible_password }}</code>
+            {% else %}
+              <span class="muted">No visible · restablecer clave</span>
+            {% endif %}
+          </td>
+          {% endif %}
           <td>{{ short_datetime(u.updated_at) }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="5">Sin usuarios.</td></tr>
+        <tr><td colspan="{{ 6 if is_supremo else 5 }}">Sin usuarios.</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -41,7 +66,7 @@
     <label>Estado
       <select name="active"><option value="1">Activo</option><option value="0">Inactivo</option></select>
     </label>
-    <label class="full">Clave <small>Si editas y la dejas vacía, no cambia.</small><input name="password" type="password" autocomplete="new-password"></label>
+    <label class="full">Clave <small>Si editas y la dejas vacía, no cambia. Para usuarios no base, esta es la forma segura de “ver” una clave: restablecerla.</small><input name="password" type="password" autocomplete="new-password"></label>
     <div class="full"><button class="btn primary" type="submit">Guardar usuario</button></div>
   </form>
 </section>
