@@ -7,6 +7,7 @@
   </div>
   <div class="actions">
     <a class="btn secondary" href="/turnos">Turnos</a>
+    <a class="btn secondary" href="/recalcular">Recalcular reglas</a>
     <a class="btn secondary" href="/usuarios">Usuarios</a>
     <a class="btn secondary" href="/vigilantes">Vigilantes</a>
     <a class="btn secondary" href="/sistema">Sistema</a>
@@ -82,5 +83,12 @@
     <p>Vigilancia escanea. El sistema decide entrada/salida. Admin corrige. Simple, por una vez.</p>
     <a class="btn secondary" href="/vigilancia">Abrir vigilancia</a>
   </article>
+
+  <article class="card config-card">
+    <h3>Recalcular reglas</h3>
+    <p>Aplica la tolerancia actual a asistencias ya importadas o capturadas. Ideal si cambiaste de 10 a 5 minutos después de cargar ingresos.</p>
+    <a class="btn secondary" href="/recalcular">Recalcular asistencias</a>
+  </article>
+
 </section>
 {% endblock %}

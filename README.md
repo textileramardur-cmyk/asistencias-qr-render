@@ -216,3 +216,24 @@ Para este cálculo NO se consideran empleados con:
 - Puesto `GERENCIA GENERAL`
 
 Aun así, el sistema evita duplicados: si el candidato calculado ya existe por algún registro excluido, avanza al siguiente número disponible. Porque duplicar IDs sería una forma muy eficiente de fabricar caos administrativo.
+
+## Recálculo de reglas de asistencia
+
+Nueva ruta:
+
+```txt
+/recalcular
+```
+
+Sirve cuando se cambian tolerancias o reglas de turno después de haber importado/capturado asistencias. El sistema recalcula por rango de fechas usando la configuración actual de turnos:
+
+- Estado de entrada: Correcta / Retardo
+- Minutos de retardo
+- Estado de salida: Correcta / Salida temprana / Extra
+- Minutos de salida temprana
+- Minutos extra
+- Límites programados y snapshots de tolerancias
+
+No cambia las horas reales de entrada/salida. Todo cambio queda auditado como `RECALCULATE_RULES`.
+
+Para aplicar, el Admin/Supremo debe escribir `RECALCULAR`.

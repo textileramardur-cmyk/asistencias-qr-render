@@ -808,6 +808,186 @@ def evaluate_exit(config: dict, shift_date_iso: str, dt: datetime) -> dict:
     }
 
 
+
+def recalculate_attendance_records(conn: Connection, fecha_inicio: str, fecha_fin: str, turno: str = "", user_name: str = "Sistema") -> dict:
+    """Recalcula retardo/salida temprana/extra usando la configuración actual de turnos.
+
+    Esto NO debe ocurrir automáticamente al cambiar un turno; se aplica por rango para que
+    el Admin decida cuándo una regla nueva debe afectar registros ya capturados/importados.
+    """
+    params = {"inicio": fecha_inicio, "fin": fecha_fin}
+    clause = "a.shift_date BETWEEN :inicio AND :fin AND COALESCE(a.anulled,0)=0"
+    if turno:
+        clause += " AND a.turno = :turno"
+        params["turno"] = turno
+    rows = fetch_all(conn, f"SELECT a.* FROM attendance a WHERE {clause} ORDER BY a.shift_date, a.id", params)
+    changed_records = 0
+    changed_fields = 0
+    scanned = len(rows)
+    late_added = 0
+    late_removed = 0
+    early_added = 0
+    early_removed = 0
+    extra_added = 0
+    extra_removed = 0
+    errors = []
+    ts = now_mx().isoformat()
+
+    def norm(v):
+        return "" if v is None else str(v)
+
+    def same(a, b):
+        return norm(a) == norm(b)
+
+    for row in rows:
+        rid = row.get("id")
+        config = get_shift_config(conn, row.get("turno") or "Día")
+        updates = {"id": rid, "updated_at": ts}
+        field_changes = []
+        reason = f"Recalculo masivo por cambio de reglas ({fecha_inicio} a {fecha_fin})"
+        entry_dt = parse_dt(row.get("entry_at") or "")
+        exit_dt = parse_dt(row.get("exit_at") or "")
+        if not entry_dt:
+            errors.append(f"Registro {rid}: no tiene entrada válida para recalcular")
+            continue
+
+        try:
+            entry_eval = evaluate_entry(config, row.get("shift_date"), entry_dt)
+        except Exception as exc:
+            errors.append(f"Registro {rid}: error evaluando entrada: {exc}")
+            continue
+
+        old_entry_status = row.get("entry_status") or ""
+        new_entry_status = entry_eval["status"]
+        if old_entry_status in ("Tarde", "Retardo") and new_entry_status == "Correcta":
+            late_removed += 1
+        if old_entry_status not in ("Tarde", "Retardo") and new_entry_status == "Retardo":
+            late_added += 1
+
+        # Campos de entrada y snapshots de reglas actuales.
+        entry_fields = {
+            "scheduled_entry_at": entry_eval["scheduled_entry_at"],
+            "scheduled_exit_at": entry_eval["scheduled_exit_at"],
+            "entry_limit_at": entry_eval["entry_limit_at"],
+            "exit_early_limit_at": entry_eval["exit_early_limit_at"],
+            "extra_limit_at": entry_eval["extra_limit_at"],
+            "entry_tolerance_minutes": entry_eval["entry_tolerance_minutes"],
+            "exit_tolerance_minutes": entry_eval["exit_tolerance_minutes"],
+            "extra_after_minutes": entry_eval["extra_after_minutes"],
+            "entry_status": new_entry_status,
+            "late_minutes": entry_eval["late_minutes"],
+        }
+        for field, new_value in entry_fields.items():
+            if not same(row.get(field), new_value):
+                updates[field] = new_value
+                field_changes.append((field, row.get(field), new_value))
+
+        if new_entry_status == "Retardo":
+            if not (row.get("late_reason") or "").strip():
+                default_reason = "NO REGISTRADO - RECALCULO DE TOLERANCIA"
+                updates["late_reason"] = default_reason
+                updates["late_justified"] = 1
+                field_changes.append(("late_reason", row.get("late_reason") or "", default_reason))
+                field_changes.append(("late_justified", row.get("late_justified") or 0, 1))
+        else:
+            # Si ya no es retardo, limpiamos el motivo para no dejar basura de reporte.
+            if (row.get("late_reason") or "") or int(row.get("late_justified") or 0) != 0:
+                updates["late_reason"] = ""
+                updates["late_justified"] = 0
+                field_changes.append(("late_reason", row.get("late_reason") or "", ""))
+                field_changes.append(("late_justified", row.get("late_justified") or 0, 0))
+
+        if exit_dt:
+            try:
+                exit_eval = evaluate_exit(config, row.get("shift_date"), exit_dt)
+            except Exception as exc:
+                errors.append(f"Registro {rid}: error evaluando salida: {exc}")
+                continue
+            old_exit_status = row.get("exit_status") or ""
+            new_exit_status = exit_eval["status"]
+            if old_exit_status == "Salida temprana" and new_exit_status != "Salida temprana":
+                early_removed += 1
+            if old_exit_status != "Salida temprana" and new_exit_status == "Salida temprana":
+                early_added += 1
+            if old_exit_status == "Extra" and new_exit_status != "Extra":
+                extra_removed += 1
+            if old_exit_status != "Extra" and new_exit_status == "Extra":
+                extra_added += 1
+
+            exit_fields = {
+                "scheduled_entry_at": exit_eval["scheduled_entry_at"],
+                "scheduled_exit_at": exit_eval["scheduled_exit_at"],
+                "entry_limit_at": exit_eval["entry_limit_at"],
+                "exit_early_limit_at": exit_eval["exit_early_limit_at"],
+                "extra_limit_at": exit_eval["extra_limit_at"],
+                "entry_tolerance_minutes": exit_eval["entry_tolerance_minutes"],
+                "exit_tolerance_minutes": exit_eval["exit_tolerance_minutes"],
+                "extra_after_minutes": exit_eval["extra_after_minutes"],
+                "exit_status": new_exit_status,
+                "early_minutes": exit_eval["early_minutes"],
+                "extra_minutes": exit_eval["extra_minutes"],
+            }
+            for field, new_value in exit_fields.items():
+                if not same(row.get(field), new_value):
+                    updates[field] = new_value
+                    field_changes.append((field, row.get(field), new_value))
+
+            if new_exit_status == "Salida temprana":
+                if not (row.get("early_reason") or "").strip():
+                    default_reason = "NO REGISTRADO - RECALCULO DE TOLERANCIA"
+                    updates["early_reason"] = default_reason
+                    updates["early_justified"] = 1
+                    field_changes.append(("early_reason", row.get("early_reason") or "", default_reason))
+                    field_changes.append(("early_justified", row.get("early_justified") or 0, 1))
+            else:
+                if (row.get("early_reason") or "") or int(row.get("early_justified") or 0) != 0:
+                    updates["early_reason"] = ""
+                    updates["early_justified"] = 0
+                    field_changes.append(("early_reason", row.get("early_reason") or "", ""))
+                    field_changes.append(("early_justified", row.get("early_justified") or 0, 0))
+        else:
+            # Registro abierto: no inventamos salida; solo actualizamos reglas de entrada.
+            if not same(row.get("exit_status") or "", ""):
+                updates["exit_status"] = ""
+                field_changes.append(("exit_status", row.get("exit_status") or "", ""))
+
+        if not field_changes:
+            continue
+
+        set_clause = ", ".join([f"{k}=:{k}" for k in updates.keys() if k != "id"])
+        conn.execute(text(f"UPDATE attendance SET {set_clause} WHERE id=:id"), updates)
+        changed_records += 1
+        changed_fields += len(field_changes)
+        for field, old, new in field_changes:
+            audit(conn, "attendance", str(rid), "RECALCULATE_RULES", user_name, field, norm(old), norm(new), reason)
+
+    log_event(
+        conn,
+        "info",
+        "asistencia",
+        "recalculate_rules",
+        f"Recalculo aplicado: {changed_records} registros modificados",
+        user_name,
+        json.dumps({"inicio": fecha_inicio, "fin": fecha_fin, "turno": turno, "scanned": scanned, "changed_fields": changed_fields}, ensure_ascii=False),
+    )
+    return {
+        "scanned": scanned,
+        "changed_records": changed_records,
+        "changed_fields": changed_fields,
+        "late_added": late_added,
+        "late_removed": late_removed,
+        "early_added": early_added,
+        "early_removed": early_removed,
+        "extra_added": extra_added,
+        "extra_removed": extra_removed,
+        "errors": errors[:100],
+        "total_errors": len(errors),
+        "fecha_inicio": fecha_inicio,
+        "fecha_fin": fecha_fin,
+        "turno": turno,
+    }
+
+
 def provisional_close_deadline(config: dict, shift_date_iso: str) -> datetime:
     start_dt, _ = schedule_times_from_config(config, shift_date_iso)
     close_t = parse_time_value(config.get("provisional_close_time") or "02:00", time(2, 0))
@@ -2170,6 +2350,74 @@ def turnos_guardar(
             )
             audit(conn, "shift_settings", name, "CREATE", admin_user["username"], reason="Alta de turno")
     return RedirectResponse(url="/turnos", status_code=303)
+
+
+@app.get("/recalcular", response_class=HTMLResponse)
+def recalcular_page(request: Request, fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None, turno: str = ""):
+    admin_user = require_admin_page(request)
+    if not admin_user:
+        return admin_login_redirect(request)
+    today = now_mx().date().isoformat()
+    fecha_inicio = fecha_inicio or today
+    fecha_fin = fecha_fin or fecha_inicio
+    with engine.begin() as conn:
+        turnos = fetch_all(conn, "SELECT * FROM shift_settings ORDER BY name")
+        params = {"inicio": fecha_inicio, "fin": fecha_fin}
+        clause = "shift_date BETWEEN :inicio AND :fin AND COALESCE(anulled,0)=0"
+        if turno:
+            clause += " AND turno=:turno"
+            params["turno"] = turno
+        resumen = {
+            "registros": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause}"), params).scalar() or 0,
+            "retardos": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND entry_status IN ('Tarde','Retardo')"), params).scalar() or 0,
+            "extras": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND exit_status='Extra'"), params).scalar() or 0,
+            "tempranas": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND exit_status='Salida temprana'"), params).scalar() or 0,
+        }
+    return templates.TemplateResponse(
+        "recalcular.html",
+        {"request": request, "fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin, "turno": turno, "turnos": turnos, "resumen": resumen, "result": None},
+    )
+
+
+@app.post("/recalcular")
+def recalcular_aplicar(
+    request: Request,
+    fecha_inicio: str = Form(...),
+    fecha_fin: str = Form(...),
+    turno: str = Form(""),
+    confirmar: str = Form(""),
+):
+    admin_user = require_admin_http(request)
+    fecha_inicio = as_text(fecha_inicio)
+    fecha_fin = as_text(fecha_fin) or fecha_inicio
+    turno = as_text(turno)
+    if confirmar.strip().upper() != "RECALCULAR":
+        raise HTTPException(status_code=400, detail="Para aplicar debes escribir RECALCULAR")
+    try:
+        date.fromisoformat(fecha_inicio)
+        date.fromisoformat(fecha_fin)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Fechas inválidas")
+    if fecha_fin < fecha_inicio:
+        raise HTTPException(status_code=400, detail="La fecha fin no puede ser menor que la fecha inicio")
+    with engine.begin() as conn:
+        result = recalculate_attendance_records(conn, fecha_inicio, fecha_fin, turno, admin_user["username"])
+        turnos = fetch_all(conn, "SELECT * FROM shift_settings ORDER BY name")
+        params = {"inicio": fecha_inicio, "fin": fecha_fin}
+        clause = "shift_date BETWEEN :inicio AND :fin AND COALESCE(anulled,0)=0"
+        if turno:
+            clause += " AND turno=:turno"
+            params["turno"] = turno
+        resumen = {
+            "registros": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause}"), params).scalar() or 0,
+            "retardos": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND entry_status IN ('Tarde','Retardo')"), params).scalar() or 0,
+            "extras": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND exit_status='Extra'"), params).scalar() or 0,
+            "tempranas": conn.execute(text(f"SELECT COUNT(*) FROM attendance WHERE {clause} AND exit_status='Salida temprana'"), params).scalar() or 0,
+        }
+    return templates.TemplateResponse(
+        "recalcular.html",
+        {"request": request, "fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin, "turno": turno, "turnos": turnos, "resumen": resumen, "result": result},
+    )
 
 
 @app.get("/retardos", response_class=HTMLResponse)
