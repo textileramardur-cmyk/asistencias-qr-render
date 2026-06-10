@@ -762,8 +762,15 @@ def evaluate_entry(config: dict, shift_date_iso: str, dt: datetime) -> dict:
     start_dt, end_dt = schedule_times_from_config(config, shift_date_iso)
     tol = int(config.get("entry_tolerance_minutes") or 0)
     entry_limit = start_dt + timedelta(minutes=tol)
-    late_minutes = minutes_between_late(dt, entry_limit)
-    status = "Retardo" if late_minutes > 0 else "Correcta"
+
+    # Regla operativa MS:
+    # La tolerancia solo decide si existe retardo.
+    # Si existe retardo, los minutos se cuentan desde la hora programada,
+    # no desde el límite de tolerancia.
+    # Ejemplo: entrada 08:00, tolerancia 5 min, llegada 08:08 => 8 min tarde.
+    is_late = dt > entry_limit
+    late_minutes = minutes_between_late(dt, start_dt) if is_late else 0
+    status = "Retardo" if is_late else "Correcta"
     return {
         "status": status,
         "scheduled_entry_at": start_dt.isoformat(),
@@ -784,15 +791,20 @@ def evaluate_exit(config: dict, shift_date_iso: str, dt: datetime) -> dict:
     extra_after = int(config.get("extra_after_minutes") or 30)
     early_limit = end_dt - timedelta(minutes=exit_tol)
     extra_limit = end_dt + timedelta(minutes=extra_after)
-    early_minutes = max(0, int((early_limit - dt).total_seconds() // 60))
-    extra_minutes = max(0, int((dt - end_dt).total_seconds() // 60))
-    if dt < early_limit:
+
+    # La tolerancia de salida temprana solo decide si existe incidencia.
+    # Si existe, los minutos se cuentan contra la hora programada de salida.
+    # Ejemplo: salida 19:00, tolerancia 10 min, salida real 18:45 => 15 min temprano.
+    is_early = dt < early_limit
+    is_extra = dt > extra_limit
+    early_minutes = max(0, int((end_dt - dt).total_seconds() // 60)) if is_early else 0
+    extra_minutes = max(0, int((dt - end_dt).total_seconds() // 60)) if is_extra else 0
+    if is_early:
         status = "Salida temprana"
-    elif dt > extra_limit:
+    elif is_extra:
         status = "Extra"
     else:
         status = "Correcta"
-        extra_minutes = 0
     return {
         "status": status,
         "scheduled_entry_at": start_dt.isoformat(),
@@ -2654,6 +2666,12 @@ def reporte_semanal_page(request: Request, semana: Optional[str] = None, area: s
         """, params)
         areas = fetch_all(conn, "SELECT DISTINCT area FROM employees WHERE area != '' ORDER BY area")
         turnos = fetch_all(conn, "SELECT name FROM shift_settings WHERE active = 1 ORDER BY name")
+    ranking_retardos = [r for r in rows if int(r.get("retardos") or 0) > 0 or int(r.get("min_retardo") or 0) > 0]
+    ranking_retardos = sorted(
+        ranking_retardos,
+        key=lambda r: (int(r.get("min_retardo") or 0), int(r.get("retardos") or 0), str(r.get("nombre") or "")),
+        reverse=True,
+    )[:10]
     totals = {
         "retardos": sum(int(r.get("retardos") or 0) for r in rows),
         "min_retardo": sum(int(r.get("min_retardo") or 0) for r in rows),
@@ -2661,7 +2679,18 @@ def reporte_semanal_page(request: Request, semana: Optional[str] = None, area: s
         "min_extra": sum(int(r.get("min_extra") or 0) for r in rows),
         "pendientes": sum(int(r.get("pendientes_revision") or 0) for r in rows),
     }
-    return templates.TemplateResponse("reporte_semanal.html", {"request": request, "rows": rows, "start": start, "end": end, "areas": areas, "turnos": turnos, "area": area, "turno": turno, "totals": totals})
+    return templates.TemplateResponse("reporte_semanal.html", {
+        "request": request,
+        "rows": rows,
+        "ranking_retardos": ranking_retardos,
+        "start": start,
+        "end": end,
+        "areas": areas,
+        "turnos": turnos,
+        "area": area,
+        "turno": turno,
+        "totals": totals,
+    })
 
 
 @app.get("/reportes/semanal.xlsx")
@@ -2705,6 +2734,22 @@ def reporte_semanal_excel(request: Request, semana: Optional[str] = None, area: 
     for r in rows:
         ws.append([r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), r.get("registros") or 0, r.get("retardos") or 0, r.get("min_retardo") or 0, r.get("salidas_tempranas") or 0, r.get("min_temprano") or 0, r.get("extras") or 0, r.get("min_extra") or 0, r.get("salidas_provisionales") or 0, r.get("pendientes_revision") or 0, r.get("abiertas") or 0, r.get("anulados") or 0])
     style_worksheet(ws, f"Reporte semanal {start.isoformat()} a {end.isoformat()}")
+
+    ranking = [r for r in rows if int(r.get("retardos") or 0) > 0 or int(r.get("min_retardo") or 0) > 0]
+    ranking = sorted(
+        ranking,
+        key=lambda r: (int(r.get("min_retardo") or 0), int(r.get("retardos") or 0), str(r.get("nombre") or "")),
+        reverse=True,
+    )
+    ws_rank = wb.create_sheet("Ranking retardos")
+    ws_rank.append(["Lugar", "ID", "Empleado", "Área", "Turno", "Retardos", "Min retardo", "Promedio min/retardo", "Registros"])
+    for idx, r in enumerate(ranking, start=1):
+        retardos = int(r.get("retardos") or 0)
+        min_retardo = int(r.get("min_retardo") or 0)
+        promedio = round(min_retardo / retardos, 2) if retardos else 0
+        ws_rank.append([idx, r.get("employee_id"), r.get("nombre"), r.get("area"), r.get("turno"), retardos, min_retardo, promedio, r.get("registros") or 0])
+    style_worksheet(ws_rank, f"Ranking de retardos {start.isoformat()} a {end.isoformat()}")
+
     return workbook_response(wb, f"reporte_semanal_{start.isoformat()}_{end.isoformat()}.xlsx")
 
 

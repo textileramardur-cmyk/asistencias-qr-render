@@ -237,3 +237,11 @@ Sirve cuando se cambian tolerancias o reglas de turno después de haber importad
 No cambia las horas reales de entrada/salida. Todo cambio queda auditado como `RECALCULATE_RULES`.
 
 Para aplicar, el Admin/Supremo debe escribir `RECALCULAR`.
+
+## Actualización de cálculo de minutos de retardo
+
+La tolerancia de entrada solo determina si existe retardo. Si el registro es retardo, los minutos tarde se calculan desde la hora programada de entrada, no desde el límite de tolerancia.
+
+Ejemplo: entrada 08:00, tolerancia 5 minutos, llegada 08:08 = retardo de 8 minutos.
+
+La misma lógica aplica para salida temprana: la tolerancia decide si existe incidencia; los minutos se calculan contra la salida programada.

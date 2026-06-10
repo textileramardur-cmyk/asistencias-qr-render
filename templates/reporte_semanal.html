@@ -21,6 +21,34 @@
   <div class="kpi"><small>Pendientes</small><strong>{{ totals.pendientes }}</strong><small>revisión</small></div>
 </div>
 
+
+<section class="card">
+  <div class="row-head">
+    <div>
+      <h3>Ranking de retardos</h3>
+      <p>Ordenado por minutos acumulados de retardo. La tolerancia define si cuenta como retardo; los minutos se cuentan desde la hora programada.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Empleado</th><th>Área</th><th>Turno</th><th>Retardos</th><th>Min retardo</th><th>Promedio</th></tr></thead>
+      <tbody>
+      {% for r in ranking_retardos %}
+        <tr>
+          <td><span class="badge badge-blue">{{ loop.index }}</span></td>
+          <td><strong>{{ r.nombre }}</strong><br><small>{{ r.employee_id }}</small></td>
+          <td>{{ r.area }}</td>
+          <td>{{ r.turno or '' }}</td>
+          <td>{{ r.retardos or 0 }}</td>
+          <td><strong>{{ r.min_retardo or 0 }} min</strong></td>
+          <td>{% if r.retardos %}{{ ((r.min_retardo or 0) / (r.retardos or 1)) | round(1) }} min{% else %}0{% endif %}</td>
+        </tr>
+      {% else %}<tr><td colspan="7">Sin retardos en esta semana.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="card">
   <h3>Acumulado por empleado</h3>
   <div class="table-wrap">
