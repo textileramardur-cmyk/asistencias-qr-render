@@ -32,28 +32,50 @@
   <div class="dashboard-toolbar">
     <div>
       <h3>Retardos y faltas acumuladas</h3>
-      <p class="muted tiny">Consulta rápida por día, semana, año o rango. Los minutos de retardo se cuentan desde la entrada programada.</p>
+      <p class="muted tiny">Consulta rápida: hoy, semana actual, mes seleccionado, año o rango entre dos fechas. Los minutos de retardo se cuentan desde la entrada programada.</p>
     </div>
     <form method="get" action="/monitor" class="dashboard-filter-form">
       <label>
         <span>Periodo</span>
         <select name="period">
-          <option value="day" {% if period=='day' %}selected{% endif %}>Día</option>
-          <option value="week" {% if period=='week' %}selected{% endif %}>Semana</option>
+          <option value="day" {% if period=='day' %}selected{% endif %}>Hoy</option>
+          <option value="week" {% if period=='week' %}selected{% endif %}>Semana actual</option>
+          <option value="month" {% if period=='month' %}selected{% endif %}>Mes</option>
           <option value="year" {% if period=='year' %}selected{% endif %}>Año</option>
           <option value="range" {% if period=='range' %}selected{% endif %}>Rango</option>
         </select>
+        <small class="muted">Semana siempre usa la semana actual.</small>
+      </label>
+      <label>
+        <span>Mes</span>
+        <select name="mes">
+          {% for m in month_options %}
+          <option value="{{ m.value }}" {% if selected_month == m.value %}selected{% endif %}>{{ m.label }}</option>
+          {% endfor %}
+        </select>
+        <small class="muted">Solo aplica cuando eliges Mes.</small>
+      </label>
+      <label>
+        <span>Año</span>
+        <select name="anio">
+          {% for y in year_options %}
+          <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
+          {% endfor %}
+        </select>
+        <small class="muted">Aplica para Mes/Año.</small>
       </label>
       <label>
         <span>Fecha inicio</span>
         <input type="date" name="fecha_inicio" value="{{ start.isoformat() }}">
+        <small class="muted">Solo aplica en Rango.</small>
       </label>
       <label>
         <span>Fecha fin</span>
         <input type="date" name="fecha_fin" value="{{ end.isoformat() }}">
+        <small class="muted">Solo aplica en Rango.</small>
       </label>
       <div class="dashboard-filter-actions">
-        <button class="btn primary" type="submit">Ver</button>
+        <button class="btn primary" type="submit">Ver acumulado</button>
       </div>
     </form>
   </div>

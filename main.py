@@ -2007,6 +2007,38 @@ def build_editable_corrections_workbook(conn: Connection, fecha_inicio: Optional
     return wb
 
 
+
+
+def find_excel_header_row(ws, required_headers: list[str], max_scan_rows: int = 15):
+    """Busca la fila real de encabezados en un Excel.
+
+    Las plantillas del sistema pueden traer una fila de título arriba de los encabezados.
+    El importador debe encontrar id_registro, id_empleado y updated_at_actual aunque estén en fila 2.
+    Porque, increíblemente, el propio sistema también merece ser compatible consigo mismo.
+    """
+    required_normalized = [normalize_header(h) for h in required_headers]
+    rows_to_scan = min(ws.max_row or 1, max_scan_rows)
+
+    for row_idx in range(1, rows_to_scan + 1):
+        raw_headers = [cell.value for cell in ws[row_idx]]
+        headers = {
+            normalize_header(value): idx
+            for idx, value in enumerate(raw_headers)
+            if normalize_header(value)
+        }
+        if all(req in headers for req in required_normalized):
+            return row_idx, headers
+
+    # Regresa la fila 1 como respaldo para poder mostrar un error claro.
+    raw_headers = [cell.value for cell in ws[1]]
+    headers = {
+        normalize_header(value): idx
+        for idx, value in enumerate(raw_headers)
+        if normalize_header(value)
+    }
+    return 1, headers
+
+
 def analyze_corrections_excel(content: bytes, admin_username: str):
     errors = []
     changes = []
@@ -2016,20 +2048,28 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
     except Exception as exc:
         return {"ok": False, "errors": [f"No se pudo leer el Excel: {exc}"], "changes": [], "total_rows": 0}
     ws = wb["correcciones"] if "correcciones" in wb.sheetnames else wb.active
-    raw_headers = [cell.value for cell in ws[1]]
-    headers = {normalize_header(h): idx for idx, h in enumerate(raw_headers)}
+    required = ["id_registro", "id_empleado", "updated_at_actual"]
+    header_row, headers = find_excel_header_row(ws, required)
 
     def col(name: str):
         return headers.get(normalize_header(name))
 
-    required = ["id_registro", "id_empleado", "updated_at_actual"]
     missing = [name for name in required if col(name) is None]
     if missing:
-        return {"ok": False, "errors": ["Faltan columnas requeridas: " + ", ".join(missing)], "changes": [], "total_rows": 0}
+        return {
+            "ok": False,
+            "errors": [
+                "Faltan columnas requeridas: " + ", ".join(missing) +
+                ". Descarga nuevamente la plantilla desde Correcciones o verifica que no hayas borrado los encabezados."
+            ],
+            "changes": [],
+            "total_rows": 0,
+        }
 
+    data_start_row = header_row + 1
     seen_records = set()
     with engine.begin() as conn:
-        for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        for row_number, row in enumerate(ws.iter_rows(min_row=data_start_row, values_only=True), start=data_start_row):
             if not any(row):
                 continue
             total_rows += 1
@@ -2460,15 +2500,26 @@ def monitor(
     fecha: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
+    mes: Optional[int] = None,
+    anio: Optional[int] = None,
 ):
     admin_user = require_admin_page(request)
     if not admin_user:
         return admin_login_redirect(request)
     today_date = now_mx().date()
     today = today_date.isoformat()
-    period, start, end, period_label = resolve_period_range(period, fecha, fecha_inicio, fecha_fin)
+    period, start, end, period_label, selected_month, selected_year = resolve_dashboard_period_range(
+        period=period,
+        fecha=fecha,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        mes=mes,
+        anio=anio,
+    )
     month_start, month_end = month_bounds()
     year_start, year_end = year_bounds()
+    month_options = dashboard_month_options(selected_year)
+    year_options = dashboard_year_options(selected_year)
     with engine.begin() as conn:
         auto_close_overdue_records(conn, admin_user["username"])
         total_employees = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
@@ -2556,6 +2607,10 @@ def monitor(
             "period_label": period_label,
             "start": start,
             "end": end,
+            "selected_month": selected_month,
+            "selected_year": selected_year,
+            "month_options": month_options,
+            "year_options": year_options,
             "ranking_retardos_dash": ranking_retardos_dash,
             "ranking_puntuales": ranking_puntuales,
             "today": today,
@@ -3181,6 +3236,103 @@ def year_bounds(base: Optional[str] = None):
     if d.year == today.year:
         end = today
     return start, end
+
+SPANISH_MONTHS = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
+
+
+def clamp_int(value, fallback: int, min_value: int, max_value: int) -> int:
+    try:
+        number = int(value)
+    except Exception:
+        return fallback
+    if number < min_value or number > max_value:
+        return fallback
+    return number
+
+
+def month_bounds_by_parts(year_value: Optional[int] = None, month_value: Optional[int] = None):
+    today = now_mx().date()
+    year = clamp_int(year_value, today.year, 2000, today.year + 5)
+    month = clamp_int(month_value, today.month, 1, 12)
+    start = date(year, month, 1)
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    end = next_month - timedelta(days=1)
+    if start <= today <= end:
+        end = today
+    return start, end, month, year
+
+
+def dashboard_month_options(selected_year: Optional[int] = None):
+    today = now_mx().date()
+    year = selected_year or today.year
+    return [
+        {"value": i + 1, "label": f"{name} {year}"}
+        for i, name in enumerate(SPANISH_MONTHS)
+    ]
+
+
+def dashboard_year_options(selected_year: Optional[int] = None):
+    today = now_mx().date()
+    selected_year = selected_year or today.year
+    years = sorted({today.year - 1, today.year, today.year + 1, selected_year})
+    return years
+
+
+def resolve_dashboard_period_range(
+    period: str = "day",
+    fecha: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    mes: Optional[int] = None,
+    anio: Optional[int] = None,
+):
+    """
+    Reglas del dashboard:
+    - Semana = semana actual, sin depender de fechas viejas del formulario.
+    - Mes = mes actual o el mes elegido en la lista.
+    - Rango = exclusivamente fecha inicio a fecha fin.
+    """
+    today = now_mx().date()
+    period = (period or "day").lower()
+    selected_month = clamp_int(mes, today.month, 1, 12)
+    selected_year = clamp_int(anio, today.year, 2000, today.year + 5)
+
+    if period in {"week", "semana"}:
+        start, end = week_bounds(None)
+        period = "week"
+        label = f"Semana actual {start.isoformat()} a {min(end, today).isoformat()}"
+    elif period in {"month", "mes"}:
+        start, end, selected_month, selected_year = month_bounds_by_parts(selected_year, selected_month)
+        month_name = SPANISH_MONTHS[selected_month - 1]
+        period = "month"
+        label = f"{month_name} {selected_year}"
+    elif period in {"year", "ano", "año"}:
+        start, end = year_bounds(str(selected_year) + "-01-01")
+        period = "year"
+        label = f"Año {selected_year}"
+    elif period in {"range", "rango"}:
+        start = safe_date(fecha_inicio, today)
+        end = safe_date(fecha_fin, start)
+        if end < start:
+            start, end = end, start
+        period = "range"
+        label = f"Rango {start.isoformat()} a {min(end, today).isoformat()}"
+    else:
+        start = safe_date(fecha, today)
+        end = start
+        period = "day"
+        label = f"Día {start.isoformat()}"
+
+    if end > today:
+        end = today
+    return period, start, end, label, selected_month, selected_year
+
 
 
 def resolve_period_range(period: str = "week", fecha: Optional[str] = None, fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None, semana: Optional[str] = None):

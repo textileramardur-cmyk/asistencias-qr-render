@@ -1,0 +1,17 @@
+PAQUETE COMPLETO CORRECTO
+
+Sube el contenido a GitHub cuidando que en la raíz queden:
+main.py
+requirements.txt
+render.yaml
+README.md
+schema_postgresql.sql
+static/
+templates/
+
+Incluye el fix de correcciones y el ajuste del dashboard:
+- Importador de correcciones detecta encabezados aunque estén en fila 2.
+- Semana del dashboard = semana actual.
+- Mes del dashboard = mes seleccionado / mes actual.
+- Año = año seleccionado.
+- Rango = fecha inicio a fecha fin.
