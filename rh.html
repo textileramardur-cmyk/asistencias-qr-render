@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Configuración</h2>
+    <p>Centro de mando sin exceso de botones, porque una configuración también puede tener dignidad.</p>
+  </div>
+  <div class="actions">
+    <a class="btn secondary" href="/turnos">Turnos</a>
+    <a class="btn secondary" href="/recalcular">Recalcular reglas</a>
+    <a class="btn secondary" href="/usuarios">Usuarios</a>
+    <a class="btn secondary" href="/vigilantes">Vigilantes</a>
+    <a class="btn secondary" href="/sistema">Sistema</a>
+    <a class="btn secondary" href="/rh">Vista RH</a>
+    {% set user = get_current_user(request) %}{% if user and user.role == 'Supremo' %}<a class="btn danger" href="/supremo/registros">Limpieza beta</a>{% endif %}
+  </div>
+</section>
+
+<div class="kpi-grid compact">
+  <div class="kpi"><small>Empleados activos</small><strong>{{ empleados_activos }}</strong></div>
+  <div class="kpi"><small>Registros abiertos</small><strong>{{ registros_abiertos }}</strong></div>
+  <div class="kpi"><small>Retardos hoy</small><strong>{{ retardos_hoy }}</strong></div>
+</div>
+
+<section class="config-grid">
+  <article class="card config-card">
+    <h3>Turnos y reglas</h3>
+    <p>Entrada, salida, tolerancia, extra y cierre provisional automático.</p>
+    <div class="table-wrap compact-table">
+      <table>
+        <thead><tr><th>Turno</th><th>Entrada</th><th>Salida</th><th>Retardo</th><th>Extra</th><th>Cierre</th></tr></thead>
+        <tbody>
+        {% for t in turnos %}
+          <tr><td><strong>{{ t.name }}</strong></td><td>{{ t.entry_time }}</td><td>{{ t.exit_time }}</td><td>{{ t.entry_tolerance_minutes }} min</td><td>{{ t.extra_after_minutes }} min</td><td>{{ t.provisional_close_time }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <a class="btn primary" href="/turnos">Configurar turnos</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Usuarios y roles</h3>
+    <p>Admin ve todo. Vigilancia solo escanea y registra. Así nadie convierte el sistema en buffet de permisos.</p>
+    <ul class="clean-list"><li><strong>Supremo:</strong> todo + limpieza beta.</li><li><strong>Admin:</strong> configuración, reportes, correcciones.</li><li><strong>RH:</strong> vista sobria de asistencias y retardos.</li><li><strong>Vigilancia:</strong> solo pantalla QR.</li></ul>
+    <a class="btn secondary" href="/usuarios">Administrar usuarios</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Cierre provisional</h3>
+    <p>Si un registro queda abierto demasiado tiempo, el sistema lo cierra con la salida programada y lo marca para revisión.</p>
+    <ul class="clean-list"><li>Evita que una entrada del día siguiente se interprete como salida anterior.</li><li>Conserva auditoría y queda pendiente para Admin/RH.</li></ul>
+    <a class="btn secondary" href="/monitor">Ver abiertos</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Reportes</h3>
+    <p>Vista semanal acumulada de retardos, faltas operativas, extras y pendientes de revisión.</p>
+    <a class="btn secondary" href="/reportes/semanal">Reporte semanal</a>
+  </article>
+
+
+  <article class="card config-card">
+    <h3>Vigilantes por QR</h3>
+    <p>Códigos de cambio de turno. El vigilante activo queda ligado automáticamente a cada registro.</p>
+    <a class="btn secondary" href="/vigilantes">Administrar vigilantes</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Vista RH</h3>
+    <p>Panel sobrio para la jefa de RH: asistencia diaria, retardos y acumulado semanal sin tocar configuración.</p>
+    <a class="btn secondary" href="/rh">Abrir vista RH</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Estado del sistema</h3>
+    <p>Conexión a base, últimos errores, eventos técnicos y registros pendientes.</p>
+    <a class="btn secondary" href="/sistema">Ver salud del sistema</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Captura QR</h3>
+    <p>Vigilancia escanea. El sistema decide entrada/salida. Admin corrige. Simple, por una vez.</p>
+    <a class="btn secondary" href="/vigilancia">Abrir vigilancia</a>
+  </article>
+
+  <article class="card config-card">
+    <h3>Recalcular reglas</h3>
+    <p>Aplica la tolerancia actual a asistencias ya importadas o capturadas. Ideal si cambiaste de 10 a 5 minutos después de cargar ingresos.</p>
+    <a class="btn secondary" href="/recalcular">Recalcular asistencias</a>
+  </article>
+
+
+
+  <article class="card config-card">
+    <h3>Estado real en planta</h3>
+    <p>Marca manualmente si una persona está dentro o fuera. Sirve cuando una importación no dejó entradas abiertas o hubo captura accidental.</p>
+    {% if estado_error %}<div class="alert bad">{{ estado_error }}</div>{% endif %}
+    {% if estado_result %}<div class="alert ok">{{ estado_result.mensaje }}</div>{% endif %}
+    <form method="post" action="/configuracion/estado-planta" class="form-stack">
+      <label>ID empleado
+        <input name="employee_id" value="{{ estado_employee_id or '' }}" inputmode="numeric" placeholder="Ej. 15">
+      </label>
+      <label>Acción
+        <select name="accion">
+          <option value="dentro" {% if (estado_accion or 'dentro') == 'dentro' %}selected{% endif %}>Marcar dentro de planta</option>
+          <option value="fuera" {% if estado_accion == 'fuera' %}selected{% endif %}>Marcar fuera de planta</option>
+        </select>
+      </label>
+      <label>Fecha turno
+        <input type="date" name="fecha" value="{{ estado_fecha or today }}">
+      </label>
+      <label>Turno
+        <select name="turno">
+          <option value="">Usar turno del empleado</option>
+          {% for t in turnos %}
+            <option value="{{ t.name }}" {% if estado_turno == t.name %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Hora a aplicar
+        <input type="time" name="hora" value="{{ estado_hora or '' }}" placeholder="Opcional">
+      </label>
+      <label>Confirmación
+        <input name="confirmacion" placeholder="Escribe CONFIRMAR para aplicar">
+      </label>
+      <button class="btn secondary" type="submit">Aplicar estado</button>
+    </form>
+    <p class="muted tiny">Si marcas dentro, el siguiente escaneo del QR será salida. Si marcas fuera, se cierra la entrada abierta.</p>
+  </article>
+
+  <article class="card config-card danger-zone">
+    <h3>Cierre seguro de salidas</h3>
+    <p>Úsalo cuando el sistema no detectó entradas abiertas por una importación o cuando se capturaron entradas accidentales en la hora de salida.</p>
+    {% if cierre_error %}<div class="alert bad">{{ cierre_error }}</div>{% endif %}
+    {% if cierre_result %}
+      <div class="alert ok">
+        <strong>Cierre aplicado:</strong><br>
+        Revisados: {{ cierre_result.revisados }} · Cerrados: {{ cierre_result.cerrados }} · Entradas accidentales anuladas: {{ cierre_result.anulados_accidentales }} · Ya cerrados: {{ cierre_result.ya_cerrados }}
+      </div>
+    {% endif %}
+    <form method="post" action="/configuracion/cierre-seguro" class="form-stack">
+      <label>Fecha turno
+        <input type="date" name="fecha" value="{{ cierre_fecha or today }}">
+      </label>
+      <label>Turno
+        <select name="turno">
+          {% for t in turnos %}
+            <option value="{{ t.name }}" {% if (cierre_turno or 'Día') == t.name %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Hora de salida a aplicar
+        <input type="time" name="hora_salida" value="{{ cierre_hora or '19:00' }}">
+      </label>
+      <label>Confirmación
+        <input name="confirmacion" placeholder="Escribe CERRAR para aplicar">
+      </label>
+      <button class="btn danger" type="submit">Cerrar salidas del turno</button>
+    </form>
+    <p class="muted tiny">No crea entradas nuevas. Anula entradas accidentales en ventana de salida si ya existe un registro previo del mismo empleado.</p>
+  </article>
+
+</section>
+{% endblock %}

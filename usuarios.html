@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Correcciones masivas por Excel</h2>
+    <p>Exporta registros, modifica columnas nuevas en Excel, reimporta, revisa la previsualización y aplica solo como Admin.</p>
+  </div>
+</section>
+
+<section class="card">
+  <h3>1. Descargar Excel editable</h3>
+  <p class="muted">El Excel trae columnas actuales y columnas nuevas. Las celdas nuevas vacías significan “no modificar”.</p>
+  <div class="form-grid export-filters">
+    <label>Fecha inicio
+      <input id="corrFechaInicio" type="date" value="{{ fecha_inicio }}" />
+    </label>
+    <label>Fecha fin
+      <input id="corrFechaFin" type="date" value="{{ fecha_fin }}" />
+    </label>
+  </div>
+  <div class="actions">
+    <button class="btn primary" type="button" onclick="downloadCorreccionesEditable()">Descargar Excel editable</button>
+  </div>
+</section>
+
+<section class="card">
+  <h3>2. Subir Excel modificado</h3>
+  <p class="muted">El sistema no reemplaza la base a ciegas. Compara, detecta alteraciones, valida y luego pide confirmación. Excel propone; el sistema juzga. Civilización, por fin.</p>
+  <form class="form-stack" action="/correcciones/analizar" method="post" enctype="multipart/form-data">
+    <label>Archivo Excel corregido
+      <input type="file" name="archivo" accept=".xlsx" required />
+    </label>
+    <button class="btn secondary" type="submit">Analizar cambios</button>
+  </form>
+</section>
+
+{% if result and result.apply_result %}
+<section class="card">
+  {% if result.apply_result.ok %}
+    <div class="result ok">{{ result.apply_result.message }}</div>
+  {% else %}
+    <div class="result error">{{ result.apply_result.message }}</div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if result and result.analysis %}
+<section class="card">
+  {% set a = result.analysis %}
+  <h3>3. Previsualización del lote {{ result.batch_id }}</h3>
+  <div class="kpi-grid compact">
+    <div class="kpi"><small>Filas leídas</small><strong>{{ a.total_rows }}</strong></div>
+    <div class="kpi"><small>Cambios detectados</small><strong>{{ a.changes|length }}</strong></div>
+    <div class="kpi"><small>Errores</small><strong>{{ a.errors|length }}</strong></div>
+  </div>
+
+  {% if a.errors %}
+  <div class="result error">
+    <strong>No se puede aplicar todavía.</strong>
+    <ul>
+      {% for err in a.errors %}{% if loop.index <= 80 %}<li>{{ err }}</li>{% endif %}{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if a.changes %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Fila</th><th>ID registro</th><th>Campo</th><th>Valor actual</th><th>Valor nuevo</th><th>Motivo</th></tr>
+      </thead>
+      <tbody>
+        {% for ch in a.changes %}{% if loop.index <= 150 %}
+        <tr>
+          <td>{{ ch.row_number }}</td>
+          <td>{{ ch.record_id }}</td>
+          <td>{{ ch.field }}</td>
+          <td>{{ ch.old or '—' }}</td>
+          <td>{{ ch.new or '—' }}</td>
+          <td>{{ ch.reason }}</td>
+        </tr>
+        {% endif %}{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if a.ok and a.changes %}
+  <form action="/correcciones/aplicar" method="post" class="actions confirm-actions">
+    <input type="hidden" name="batch_id" value="{{ result.batch_id }}" />
+    <button class="btn primary" type="submit">Aplicar correcciones del lote</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Lotes recientes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Lote</th><th>Admin</th><th>Estado</th><th>Filas</th><th>Cambios</th><th>Errores</th><th>Creado</th><th>Aplicado</th></tr>
+      </thead>
+      <tbody>
+        {% for b in batches %}
+        <tr>
+          <td><strong>{{ b.batch_id }}</strong></td>
+          <td>{{ b.user_name }}</td>
+          <td>{{ b.status }}</td>
+          <td>{{ b.total_rows }}</td>
+          <td>{{ b.total_changes }}</td>
+          <td>{{ b.total_errors }}</td>
+          <td>{{ b.created_at[:16] }}</td>
+          <td>{{ b.applied_at[:16] if b.applied_at else '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Sin lotes todavía.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function downloadCorreccionesEditable() {
+    const inicio = document.getElementById('corrFechaInicio').value;
+    const fin = document.getElementById('corrFechaFin').value;
+    const params = new URLSearchParams();
+    if (inicio) params.set('fecha_inicio', inicio);
+    if (fin) params.set('fecha_fin', fin);
+    window.location.href = '/correcciones/exportar-editable.xlsx' + (params.toString() ? '?' + params.toString() : '');
+  }
+</script>
+{% endblock %}

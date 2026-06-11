@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head">
+  <h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
+  <p>El ID es numérico y se asigna automáticamente con el último ID operativo + 1. No considera área GG ni puesto GERENCIA GENERAL para calcular el consecutivo.</p>
+</section>
+
+<form class="card form-grid" action="{{ '/personal/' ~ employee.id ~ '/guardar' if employee else '/personal/guardar' }}" method="post" enctype="multipart/form-data">
+  <label>ID empleado
+    <input name="id" value="{{ employee.id if employee else next_id }}" readonly required inputmode="numeric" pattern="[0-9]+" />
+    <small>ID numérico automático. Calculado con el número más alto que no sea área GG ni puesto GERENCIA GENERAL + 1.</small>
+  </label>
+  <label>Nombre completo
+    <input name="nombre" value="{{ employee.nombre if employee else '' }}" required />
+  </label>
+  <label>Área
+    <input name="area" value="{{ employee.area if employee else '' }}" />
+  </label>
+  <label>Puesto
+    <input name="puesto" value="{{ employee.puesto if employee else '' }}" />
+  </label>
+  <label>Turno
+    <select name="turno">
+      {% for t in turnos or [] %}
+      <option value="{{ t.name }}" {% if employee and employee.turno == t.name %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+      {% if not turnos %}
+      <option value="Día">Día</option><option value="Noche">Noche</option>
+      {% endif %}
+    </select>
+  </label>
+  <label>Estado
+    <select name="estado">
+      {% for estado in ['Activo', 'Inactivo', 'Baja', 'Suspendido'] %}
+      <option value="{{ estado }}" {% if employee and employee.estado == estado %}selected{% endif %}>{{ estado }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Tiene vehículo
+    <select name="tiene_vehiculo">
+      <option value="0" {% if not employee or not employee.tiene_vehiculo %}selected{% endif %}>No</option>
+      <option value="1" {% if employee and employee.tiene_vehiculo %}selected{% endif %}>Sí</option>
+    </select>
+  </label>
+  <label>QR activo
+    <select name="qr_activo">
+      <option value="1" {% if not employee or employee.qr_activo %}selected{% endif %}>Sí</option>
+      <option value="0" {% if employee and not employee.qr_activo %}selected{% endif %}>No</option>
+    </select>
+  </label>
+  <label class="full">Observaciones
+    <textarea name="observaciones" rows="4">{{ employee.observaciones if employee else '' }}</textarea>
+  </label>
+
+
+  <div class="full actions">
+    <button class="btn primary" type="submit">Guardar expediente</button>
+    <a class="btn secondary" href="/personal">Cancelar</a>
+  </div>
+</form>
+{% endblock %}

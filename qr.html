@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head dashboard-head better-dashboard-head">
+  <div>
+    <h2>Dashboard operativo</h2>
+    <p>Panorama ejecutivo de asistencia, retardos, faltas, personal dentro y rankings de comportamiento.</p>
+  </div>
+  <div class="actions dashboard-head-actions">
+    <a class="btn secondary" href="/retardos">Analizar retardos</a>
+    <a class="btn secondary" href="/reportes/semanal">Reporte por rango</a>
+    <a class="btn primary" href="/exportar">Exportar Excel</a>
+  </div>
+</section>
+
+{% if request.query_params.get('manual') == 'entrada_ok' %}
+<div class="alert ok">
+  Entrada manual registrada. La persona quedó activa dentro de planta y su siguiente escaneo será salida.
+</div>
+{% endif %}
+
+<section class="dashboard-section">
+  <div class="dashboard-top-kpis">
+    <div class="kpi"><small>Empleados activos</small><strong>{{ total_employees }}</strong><span class="kpi-note">Plantilla disponible</span></div>
+    <div class="kpi"><small>Entradas hoy</small><strong>{{ present_today }}</strong><span class="kpi-note">Registros del día</span></div>
+    <div class="kpi"><small>Faltas / sin registro</small><strong>{{ absent_count }}</strong><span class="kpi-note">Activos sin entrada hoy</span></div>
+    <div class="kpi"><small>Retardos hoy</small><strong>{{ late_today }}</strong><span class="kpi-note">Según tolerancia actual</span></div>
+    <div class="kpi"><small>Extras hoy</small><strong>{{ extra_today }}</strong><span class="kpi-note">Salidas marcadas como extra</span></div>
+  </div>
+</section>
+
+<section class="card dashboard-filter-card">
+  <div class="dashboard-toolbar">
+    <div>
+      <h3>Retardos y faltas acumuladas</h3>
+      <p class="muted tiny">Consulta rápida por día, semana, año o rango. Los minutos de retardo se cuentan desde la entrada programada.</p>
+    </div>
+    <form method="get" action="/monitor" class="dashboard-filter-form">
+      <label>
+        <span>Periodo</span>
+        <select name="period">
+          <option value="day" {% if period=='day' %}selected{% endif %}>Día</option>
+          <option value="week" {% if period=='week' %}selected{% endif %}>Semana</option>
+          <option value="year" {% if period=='year' %}selected{% endif %}>Año</option>
+          <option value="range" {% if period=='range' %}selected{% endif %}>Rango</option>
+        </select>
+      </label>
+      <label>
+        <span>Fecha inicio</span>
+        <input type="date" name="fecha_inicio" value="{{ start.isoformat() }}">
+      </label>
+      <label>
+        <span>Fecha fin</span>
+        <input type="date" name="fecha_fin" value="{{ end.isoformat() }}">
+      </label>
+      <div class="dashboard-filter-actions">
+        <button class="btn primary" type="submit">Ver</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="dashboard-secondary-kpis">
+    <div class="kpi mini"><small>Hoy: retardos</small><strong>{{ day_stats.retardos }}</strong><span class="kpi-note">Faltas {{ day_stats.faltas }}</span></div>
+    <div class="kpi mini"><small>Mes: retardos</small><strong>{{ month_stats.retardos }}</strong><span class="kpi-note">Faltas {{ month_stats.faltas }}</span></div>
+    <div class="kpi mini"><small>Año: retardos</small><strong>{{ year_stats.retardos }}</strong><span class="kpi-note">Faltas {{ year_stats.faltas }}</span></div>
+    <div class="kpi mini"><small>Periodo</small><strong>{{ period_label }}</strong><span class="kpi-note">Consulta activa</span></div>
+    <div class="kpi mini"><small>Retardo</small><strong>{{ fmt_minutes(period_stats.min_retardo) }}</strong><span class="kpi-note">Acumulados en el periodo</span></div>
+    <div class="kpi mini"><small>Salidas tempranas</small><strong>{{ period_stats.tempranas }}</strong><span class="kpi-note">{{ period_stats.min_temprano }} min</span></div>
+  </div>
+</section>
+
+<section class="dashboard-rank-grid">
+  <article class="card rank-card">
+    <div class="section-row">
+      <div>
+        <h3>Ranking de puntualidad</h3>
+        <p class="muted tiny">Personas sin retardos ni faltas dentro del periodo seleccionado.</p>
+      </div>
+      <span class="badge ok">Top {{ ranking_puntuales|length }}</span>
+    </div>
+    <div class="rank-list">
+      {% for r in ranking_puntuales %}
+      <div class="rank-item punctual">
+        <div class="rank-position">{{ loop.index }}</div>
+        <div class="rank-content">
+          <strong>{{ r.nombre }}</strong>
+          <small>ID {{ r.employee_id }} · {{ r.registros }} registros</small>
+        </div>
+        <div class="rank-value ok-text">{{ r.registros }}</div>
+      </div>
+      {% else %}
+      <div class="rank-empty">Sin ranking todavía.</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="card rank-card">
+    <div class="section-row">
+      <div>
+        <h3>Ranking de retardos</h3>
+        <p class="muted tiny">Ordenado por minutos acumulados dentro del periodo seleccionado.</p>
+      </div>
+      <span class="badge warn">Top {{ ranking_retardos_dash|length }}</span>
+    </div>
+    <div class="rank-list">
+      {% for r in ranking_retardos_dash %}
+      <div class="rank-item late">
+        <div class="rank-position">{{ loop.index }}</div>
+        <div class="rank-content">
+          <strong>{{ r.nombre }}</strong>
+          <small>ID {{ r.employee_id }}</small>
+        </div>
+        <div class="rank-value">{{ fmt_minutes(r.min_retardo) }}</div>
+      </div>
+      {% else %}
+      <div class="rank-empty">Sin retardos en el periodo.</div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="dashboard-ops-grid">
+  <article class="card ops-card inside-card">
+    <div class="section-row">
+      <div>
+        <h3>Personas dentro de planta</h3>
+        <p class="muted tiny">Registros abiertos activos. Útil para operación, seguridad y cierre de turno.</p>
+      </div>
+      <a class="btn small secondary" href="/monitor">Actualizar</a>
+    </div>
+    <div class="table-wrap clean-table">
+      <table>
+        <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Vehículo</th><th>Estado</th></tr></thead>
+        <tbody>
+          {% for row in inside %}
+          <tr>
+            <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
+            <td>{{ row.area }}</td>
+            <td>{{ row.turno }}</td>
+            <td>{{ short_datetime(row.entry_at) if row.entry_at else '-' }}</td>
+            <td>{{ 'Sí' if row.vehicle_entered else 'No' }}</td>
+            <td><span class="badge ok">Dentro</span></td>
+          </tr>
+          {% else %}<tr><td colspan="6">No hay personal con entrada abierta.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card ops-card absent-card">
+    <div class="section-row">
+      <div>
+        <h3>Personas que faltaron o no tienen registro hoy</h3>
+        <p class="muted tiny">Empleados activos sin asistencia registrada para la fecha actual.</p>
+      </div>
+      <span class="badge warn">{{ absent_count }} sin registro</span>
+    </div>
+    <div class="table-wrap clean-table">
+      <table>
+        <thead><tr><th>ID</th><th>Empleado</th><th>Área</th><th>Puesto</th><th>Turno</th><th>Entrada manual</th></tr></thead>
+        <tbody>
+          {% for row in absent_today %}
+          <tr>
+            <td><strong>{{ row.id }}</strong></td>
+            <td>{{ row.nombre }}</td>
+            <td>{{ row.area or '-' }}</td>
+            <td>{{ row.puesto or '-' }}</td>
+            <td>{{ row.turno or '-' }}</td>
+            <td>
+              <form method="post" action="/manual/entrada" class="manual-entry-form">
+                <input type="hidden" name="employee_id" value="{{ row.id }}">
+                <input type="hidden" name="fecha" value="{{ today }}">
+                <input type="time" name="hora_entrada" value="08:00" required>
+                <select name="vehiculo">
+                  <option value="0">Sin vehículo</option>
+                  <option value="1">Con vehículo</option>
+                </select>
+                <input name="motivo" placeholder="Motivo obligatorio" required>
+                <button class="btn small primary" type="submit">Marcar dentro</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}<tr><td colspan="6">No hay personas activas sin registro hoy.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card ops-card incidents-card">
+    <div class="section-row">
+      <div>
+        <h3>Incidencias de hoy</h3>
+        <p class="muted tiny">Solo fecha actual: retardos, extras, salidas tempranas y pendientes.</p>
+      </div>
+      <a class="btn small secondary" href="/retardos">Ver detalle</a>
+    </div>
+    <div class="table-wrap clean-table">
+      <table>
+        <thead><tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Retardo</th><th>Min extra</th><th>Motivo</th></tr></thead>
+        <tbody>
+          {% for row in incidents %}
+          <tr>
+            <td><strong>{{ row.nombre }}</strong><br><small>{{ row.employee_id }}</small></td>
+            <td>{{ row.shift_date }}</td>
+            <td>{{ row.entry_status or '-' }}</td>
+            <td>{{ row.exit_status or '-' }}</td>
+            <td>{{ fmt_minutes(row.late_minutes) }}</td>
+            <td>{{ row.extra_minutes or 0 }}</td>
+            <td>{{ row.late_reason or row.early_reason or row.incident or '-' }}</td>
+          </tr>
+          {% else %}<tr><td colspan="7">Sin incidencias hoy.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+{% endblock %}

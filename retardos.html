@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head row-head">
+  <div>
+    <h2>Exportar Excel</h2>
+    <p>Descarga empleados, asistencias, incidencias, auditoría o un reporte general cuando lo necesites.</p>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Filtros de fecha</h3>
+  <p class="muted">Estos filtros aplican para asistencias, incidencias y reporte general. Empleados y auditoría se descargan completos.</p>
+
+  <div class="form-grid export-filters">
+    <label>
+      Fecha inicio
+      <input id="fechaInicio" type="date" value="{{ fecha_inicio }}" />
+    </label>
+
+    <label>
+      Fecha fin
+      <input id="fechaFin" type="date" value="{{ fecha_fin }}" />
+    </label>
+  </div>
+</section>
+
+<section class="export-grid">
+  <article class="card export-card">
+    <h3>Reporte general</h3>
+    <p>Incluye resumen, empleados, asistencias, incidencias y auditoría en un solo archivo.</p>
+    <button class="btn primary" type="button" onclick="downloadExcel('/exportar/general.xlsx', true)">Descargar general</button>
+  </article>
+
+  <article class="card export-card">
+    <h3>Asistencias</h3>
+    <p>Entradas, salidas, turnos, retardos, salidas tempranas, guardias y vehículo registrado.</p>
+    <button class="btn secondary" type="button" onclick="downloadExcel('/exportar/asistencias.xlsx', true)">Descargar asistencias</button>
+  </article>
+
+  <article class="card export-card">
+    <h3>Incidencias</h3>
+    <p>Retardos, salidas tempranas, observaciones y registros que requieren revisión.</p>
+    <button class="btn secondary" type="button" onclick="downloadExcel('/exportar/incidencias.xlsx', true)">Descargar incidencias</button>
+  </article>
+
+  <article class="card export-card">
+    <h3>Empleados</h3>
+    <p>Catálogo completo de empleados, turnos, estado, QR activo y configuración de vehículo.</p>
+    <a class="btn secondary" href="/exportar/empleados.xlsx">Descargar empleados</a>
+  </article>
+
+  <article class="card export-card">
+    <h3>Auditoría</h3>
+    <p>Altas, ediciones y registros operativos guardados en la bitácora del sistema.</p>
+    <a class="btn secondary" href="/exportar/auditoria.xlsx">Descargar auditoría</a>
+  </article>
+
+  <article class="card export-card">
+    <h3>Exportar para nómina</h3>
+    <p>ID, nombre completo, minutos de retardo + salida temprana, faltas y tiempo total trabajado descontando comida según regla.</p>
+    <button class="btn primary" type="button" onclick="downloadExcel('/exportar/nomina.xlsx', true)">Descargar nómina</button>
+  </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function downloadExcel(baseUrl, useDates) {
+    const inicio = document.getElementById('fechaInicio').value;
+    const fin = document.getElementById('fechaFin').value;
+    const params = new URLSearchParams();
+    if (useDates && inicio) params.set('fecha_inicio', inicio);
+    if (useDates && fin) params.set('fecha_fin', fin);
+    const url = params.toString() ? `${baseUrl}?${params.toString()}` : baseUrl;
+    window.location.href = url;
+  }
+</script>
+{% endblock %}
