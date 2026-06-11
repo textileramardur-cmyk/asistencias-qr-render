@@ -378,10 +378,17 @@ async function toggleScanner() {
   const readerId = 'reader';
   const status = byId('scannerStatus');
   const btnText = byId('cameraButtonText');
-  if (scannerRunning && scanner) {
-    await scanner.stop();
+  const cameraZone = byId('guardCameraZone');
+
+  const markCameraOff = () => {
     scannerRunning = false;
+    cameraZone?.classList.remove('camera-active');
     if (btnText) btnText.innerText = 'Activar cámara';
+  };
+
+  if (scannerRunning && scanner) {
+    try { await scanner.stop(); } catch (_) {}
+    markCameraOff();
     if (status) status.innerText = 'Cámara detenida. Puedes capturar ID manual.';
     return;
   }
@@ -392,24 +399,63 @@ async function toggleScanner() {
   }
 
   scanner = new Html5Qrcode(readerId);
-  try {
-    await scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 280, height: 280 } },
-      async (decodedText) => {
-        if (qrBusy) return;
-        byId('employeeId').value = decodedText.trim();
-        if (status) status.innerText = `QR leído. Validando...`;
-        await scanCode();
-        try { await scanner.stop(); } catch (_) {}
-        scannerRunning = false;
-        if (btnText) btnText.innerText = 'Activar cámara';
+  const onDecoded = async (decodedText) => {
+    if (qrBusy) return;
+    byId('employeeId').value = decodedText.trim();
+    if (status) status.innerText = 'QR leído. Validando...';
+    await scanCode();
+    try { await scanner.stop(); } catch (_) {}
+    markCameraOff();
+  };
+
+  const scannerConfigs = [
+    {
+      camera: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30, max: 30 }
+      },
+      options: {
+        fps: 12,
+        qrbox: { width: 340, height: 340 },
+        aspectRatio: 1.7777778,
+        disableFlip: true,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
       }
-    );
-    scannerRunning = true;
-    if (btnText) btnText.innerText = 'Detener cámara';
-    if (status) status.innerText = 'Cámara activa. Centra el QR en el marco.';
+    },
+    {
+      camera: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      options: { fps: 10, qrbox: { width: 320, height: 320 }, aspectRatio: 1.7777778, disableFlip: true }
+    },
+    {
+      camera: { facingMode: 'environment' },
+      options: { fps: 10, qrbox: { width: 300, height: 300 }, disableFlip: true }
+    }
+  ];
+
+  let lastError = null;
+  try {
+    for (const cfg of scannerConfigs) {
+      try {
+        await scanner.start(cfg.camera, cfg.options, onDecoded);
+        scannerRunning = true;
+        cameraZone?.classList.add('camera-active');
+        if (btnText) btnText.innerText = 'Detener cámara';
+        if (status) status.innerText = 'Cámara limpia activa. Acerca el QR hasta verlo nítido.';
+        return;
+      } catch (err) {
+        lastError = err;
+        try { await scanner.stop(); } catch (_) {}
+      }
+    }
+    throw lastError;
   } catch (err) {
+    markCameraOff();
     if (status) status.innerText = 'No se pudo abrir cámara. Revisa permisos o usa ID manual.';
     showFeedback('error', 'SIN CÁMARA', 'Revisa permisos del navegador o escribe el ID manualmente.');
   }

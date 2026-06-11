@@ -1,0 +1,16 @@
+FIX CÁMARA LIMPIA VIGILANCIA
+
+Qué cambia:
+- La cámara ya no lleva neblina, blur ni overlay oscuro al centro.
+- El video usa object-fit: contain para evitar zoom/crop innecesario.
+- El sistema pide cámara trasera con resolución ideal 1920x1080, con fallback a 1280x720 y luego básico.
+- El marco de lectura queda transparente y sin fondo borroso.
+- Botones y textos quedan encima, pero el centro de la cámara queda limpio para leer QR.
+
+Archivos modificados:
+- static/app.js
+- static/styles.css
+
+No cambia base de datos.
+No cambia reglas de asistencia.
+No borra información.

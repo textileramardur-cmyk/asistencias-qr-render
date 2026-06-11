@@ -1657,3 +1657,70 @@ th { color: var(--azul); background: #f8fafc; }
   .last-movement-item { grid-template-columns: 62px 1fr; }
   .last-movement-item em { grid-column: 2; text-align: left; }
 }
+
+
+/* =========================================================
+   FIX cámara limpia vigilancia: video claro, sin neblina.
+   Prioridad: lectura de QR antes que adornos visuales.
+   ========================================================= */
+.guard-camera-zone.camera-active {
+  background: #000 !important;
+}
+.guard-camera-zone.camera-active .guard-reader {
+  background: #000 !important;
+}
+.guard-camera-zone.camera-active .guard-reader video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  filter: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+  image-rendering: auto !important;
+  background: #000 !important;
+}
+.guard-camera-zone.camera-active .guard-camera-shade {
+  background: linear-gradient(180deg, rgba(0,0,0,.48) 0%, rgba(0,0,0,.10) 22%, rgba(0,0,0,0) 46%, rgba(0,0,0,.12) 72%, rgba(0,0,0,.62) 100%) !important;
+}
+.guard-camera-zone.camera-active .guard-frame-v2 {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  border-radius: 24px !important;
+}
+.guard-camera-zone.camera-active .guard-frame-v2::after {
+  display: none !important;
+}
+.guard-camera-zone.camera-active .guard-frame-v2 span {
+  border-color: rgba(255,255,255,.96) !important;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.75));
+}
+.guard-camera-zone.camera-active .guard-active-box,
+.guard-camera-zone.camera-active .guard-status-pill,
+.guard-camera-zone.camera-active .guard-exit-v2 {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(0,0,0,.58) !important;
+  border-color: rgba(255,255,255,.22) !important;
+}
+.guard-camera-zone.camera-active .guard-main-instruction p,
+.guard-camera-zone.camera-active .guard-main-instruction h1 {
+  text-shadow: 0 3px 12px rgba(0,0,0,.82);
+}
+.guard-camera-zone.camera-active .guard-actions-v2 {
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,.42));
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 18px;
+}
+.guard-camera-zone.camera-active .guard-big-btn {
+  box-shadow: 0 10px 26px rgba(0,0,0,.34);
+}
+@media (max-width: 560px) {
+  .guard-camera-zone.camera-active .guard-frame-v2 {
+    width: min(78vw, 360px);
+    height: min(78vw, 360px);
+  }
+}
