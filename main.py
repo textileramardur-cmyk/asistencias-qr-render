@@ -760,6 +760,42 @@ def expected_times(turno: str, shift_date_iso: str):
     return schedule_times_from_config(default_shift_config(turno), shift_date_iso)
 
 
+def parse_work_days(value: str) -> set[int]:
+    """Convierte work_days de shift_settings en días ISO: lunes=1 ... domingo=7."""
+    days = set()
+    for part in as_text(value).replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            day = int(part)
+        except Exception:
+            continue
+        if 1 <= day <= 7:
+            days.add(day)
+        elif 0 <= day <= 6:
+            # Compatibilidad por si alguna versión vieja guardó lunes=0.
+            days.add(day + 1)
+    return days or {1, 2, 3, 4, 5}
+
+
+def work_days_for_filter(conn: Connection, turno: str = "") -> set[int]:
+    """Días laborales aplicables para faltas/reportes.
+
+    Si se filtra por turno, usa la configuración de ese turno.
+    Si no hay filtro, usa la unión de turnos activos. Así el dashboard no se queda clavado
+    a lunes-viernes si algún día la operación cambia. Porque aparentemente los turnos
+    también tienen vida propia.
+    """
+    if turno:
+        return parse_work_days(get_shift_config(conn, turno).get("work_days", "1,2,3,4,5"))
+    rows = fetch_all(conn, "SELECT work_days FROM shift_settings WHERE COALESCE(active,1)=1")
+    days = set()
+    for row in rows:
+        days.update(parse_work_days(row.get("work_days", "1,2,3,4,5")))
+    return days or {1, 2, 3, 4, 5}
+
+
 def minutes_between_late(a: datetime, b: datetime) -> int:
     return max(0, int((a - b).total_seconds() // 60))
 
@@ -1965,6 +2001,98 @@ def parse_time_or_datetime(value, shift_date_iso: str, turno: str, kind: str, en
         return None, f"No se pudo interpretar fecha/hora: {exc}"
 
 
+def effective_attendance_derived_fields(
+    conn: Connection,
+    base_row: dict,
+    shift_date: str,
+    turno: str,
+    entry_value: str,
+    exit_value: str,
+    late_reason_value: str = "",
+    early_reason_value: str = "",
+) -> dict:
+    """Calcula TODOS los campos derivados de asistencia para correcciones.
+
+    Antes, la corrección masiva podía cambiar hora/turno/fecha y solo mover el estado,
+    dejando minutos, límites y horarios programados viejos. Muy humano: cambiar la hora
+    y dejar el reloj viejo pegado en el reporte. Esta función evita eso.
+    """
+    derived = {}
+    config = get_shift_config(conn, turno or "Día")
+    entry_dt = parse_dt(entry_value or "")
+    exit_dt = parse_dt(exit_value or "")
+
+    # Siempre dejamos snapshot de horarios del turno aplicado, aunque el registro quede abierto.
+    scheduled_entry, scheduled_exit = schedule_times_from_config(config, shift_date)
+    derived.update({
+        "scheduled_entry_at": scheduled_entry.isoformat(),
+        "scheduled_exit_at": scheduled_exit.isoformat(),
+        "entry_limit_at": (scheduled_entry + timedelta(minutes=int(config.get("entry_tolerance_minutes") or 0))).isoformat(),
+        "exit_early_limit_at": (scheduled_exit - timedelta(minutes=int(config.get("exit_tolerance_minutes") or 0))).isoformat(),
+        "extra_limit_at": (scheduled_exit + timedelta(minutes=int(config.get("extra_after_minutes") or 30))).isoformat(),
+        "entry_tolerance_minutes": int(config.get("entry_tolerance_minutes") or 0),
+        "exit_tolerance_minutes": int(config.get("exit_tolerance_minutes") or 0),
+        "extra_after_minutes": int(config.get("extra_after_minutes") or 30),
+    })
+
+    if entry_dt:
+        entry_eval = evaluate_entry(config, shift_date, entry_dt)
+        derived.update({
+            "entry_status": entry_eval["status"],
+            "late_minutes": entry_eval["late_minutes"],
+        })
+        if entry_eval["status"] == "Retardo":
+            if not as_text(late_reason_value).strip():
+                derived["late_reason"] = "NO REGISTRADO - CORRECCION MASIVA"
+            derived["late_justified"] = 1
+        else:
+            derived["late_reason"] = ""
+            derived["late_justified"] = 0
+    else:
+        derived.update({
+            "entry_status": "",
+            "late_minutes": 0,
+            "late_reason": "",
+            "late_justified": 0,
+        })
+
+    if exit_dt:
+        exit_eval = evaluate_exit(config, shift_date, exit_dt)
+        derived.update({
+            "exit_status": exit_eval["status"],
+            "early_minutes": exit_eval["early_minutes"],
+            "extra_minutes": exit_eval["extra_minutes"],
+        })
+        if exit_eval["status"] == "Salida temprana":
+            if not as_text(early_reason_value).strip():
+                derived["early_reason"] = "NO REGISTRADO - CORRECCION MASIVA"
+            derived["early_justified"] = 1
+        else:
+            derived["early_reason"] = ""
+            derived["early_justified"] = 0
+
+        worked, lunch, note = compute_worked_minutes(
+            entry_value or "",
+            exit_value or "",
+            derived.get("scheduled_entry_at", ""),
+            derived.get("scheduled_exit_at", ""),
+            base_row.get("lunch_taken") or "",
+            derived.get("exit_status") or "",
+        )
+        derived["worked_minutes"] = worked
+    else:
+        derived.update({
+            "exit_status": "",
+            "early_minutes": 0,
+            "extra_minutes": 0,
+            "early_reason": "",
+            "early_justified": 0,
+            "worked_minutes": 0,
+        })
+
+    return derived
+
+
 def correction_export_headers() -> list[str]:
     return [
         "id_registro", "id_empleado", "nombre", "area", "fecha_turno_actual", "turno_actual",
@@ -2121,11 +2249,19 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                         continue
 
             row_changes = []
+            core_changed = False
+            late_reason_value = db.get("late_reason") or ""
+            early_reason_value = db.get("early_reason") or ""
+
             def add_change(field, old, new):
                 old_txt = "" if old is None else str(old)
                 new_txt = "" if new is None else str(new)
+                # Mantener un solo cambio final por campo dentro de la fila.
+                row_changes[:] = [c for c in row_changes if c.get("field") != field]
                 if old_txt != new_txt:
                     row_changes.append({"record_id": record_id, "field": field, "old": old_txt, "new": new_txt, "row_number": row_number, "reason": motivo})
+                    return True
+                return False
 
             # Horas
             entry_dt_current = parse_dt(db["entry_at"]) if db.get("entry_at") else None
@@ -2137,7 +2273,8 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                     continue
                 entry_value = "" if parsed == "__CLEAR__" else parsed.isoformat()
                 entry_dt_current = None if parsed == "__CLEAR__" else parsed
-                add_change("entry_at", db.get("entry_at") or "", entry_value)
+                if add_change("entry_at", db.get("entry_at") or "", entry_value):
+                    core_changed = True
 
             exit_value = db.get("exit_at") or ""
             if col("salida_nueva") is not None and as_text(row[col("salida_nueva")]):
@@ -2146,7 +2283,8 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                     errors.append(f"Fila {row_number}: {err}")
                     continue
                 exit_value = "" if parsed == "__CLEAR__" else parsed.isoformat()
-                add_change("exit_at", db.get("exit_at") or "", exit_value)
+                if add_change("exit_at", db.get("exit_at") or "", exit_value):
+                    core_changed = True
 
             if entry_value and exit_value:
                 entry_dt = parse_dt(entry_value)
@@ -2155,8 +2293,10 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                     errors.append(f"Fila {row_number}: la salida queda antes que la entrada")
                     continue
 
-            add_change("shift_date", db["shift_date"], new_shift_date)
-            add_change("turno", db["turno"], new_turno)
+            if add_change("shift_date", db["shift_date"], new_shift_date):
+                core_changed = True
+            if add_change("turno", db["turno"], new_turno):
+                core_changed = True
 
             # Textos editables
             field_map = [
@@ -2168,15 +2308,30 @@ def analyze_corrections_excel(content: bytes, admin_username: str):
                 if col(excel_col) is not None and as_text(row[col(excel_col)]):
                     val = as_text(row[col(excel_col)])
                     new_val = "" if val.upper() == "BORRAR" else val
+                    if db_field == "late_reason":
+                        late_reason_value = new_val
+                    elif db_field == "early_reason":
+                        early_reason_value = new_val
                     add_change(db_field, db.get(db_field) or "", new_val)
 
-            # Recalcular estados si se movieron horas/turno/fecha.
-            entry_for_status = parse_dt(entry_value) if entry_value else None
-            exit_for_status = parse_dt(exit_value) if exit_value else None
-            if entry_for_status:
-                add_change("entry_status", db.get("entry_status") or "", entry_status(new_turno, new_shift_date, entry_for_status))
-            if exit_for_status:
-                add_change("exit_status", db.get("exit_status") or "", exit_status(new_turno, new_shift_date, exit_for_status))
+            # Recalcular TODOS los campos derivados si se movieron hora/turno/fecha.
+            # No recalculamos filas sin cambios para que una plantilla recién exportada no genere
+            # falsos cambios por diferencias históricas.
+            if core_changed:
+                if not entry_value and exit_value:
+                    errors.append(f"Fila {row_number}: no se puede dejar salida sin entrada")
+                    continue
+                try:
+                    derived = effective_attendance_derived_fields(
+                        conn, db, new_shift_date, new_turno, entry_value, exit_value, late_reason_value, early_reason_value
+                    )
+                except Exception as exc:
+                    errors.append(f"Fila {row_number}: no se pudo recalcular asistencia: {exc}")
+                    continue
+                for field, new_value in derived.items():
+                    # Si el usuario ya escribió explícitamente un motivo, se respeta su texto;
+                    # si el recalculo debe limpiar o completar, sí se agrega.
+                    add_change(field, db.get(field), new_value)
 
             if row_changes and not motivo:
                 errors.append(f"Fila {row_number}: falta motivo_correccion")
@@ -2224,7 +2379,13 @@ def apply_correction_batch(batch_id: str, admin_username: str) -> dict:
     for change in changes:
         grouped.setdefault(str(change["record_id"]), []).append(change)
 
-    allowed_fields = {"entry_at", "exit_at", "shift_date", "turno", "late_reason", "early_reason", "incident", "entry_status", "exit_status"}
+    allowed_fields = {
+        "entry_at", "exit_at", "shift_date", "turno", "late_reason", "early_reason", "incident",
+        "entry_status", "exit_status",
+        "scheduled_entry_at", "scheduled_exit_at", "entry_limit_at", "exit_early_limit_at", "extra_limit_at",
+        "entry_tolerance_minutes", "exit_tolerance_minutes", "extra_after_minutes",
+        "late_minutes", "early_minutes", "extra_minutes", "late_justified", "early_justified", "worked_minutes",
+    }
     applied = 0
     ts = now_mx().isoformat()
     with engine.begin() as conn:
@@ -2524,7 +2685,7 @@ def monitor(
         auto_close_overdue_records(conn, admin_user["username"])
         total_employees = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
         present_today = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_at IS NOT NULL AND COALESCE(anulled,0)=0"),
+            text("SELECT COUNT(DISTINCT employee_id) FROM attendance WHERE shift_date = :today AND entry_at IS NOT NULL AND COALESCE(anulled,0)=0"),
             {"today": today}
         ).scalar() or 0
         absent_today = fetch_all(conn,
@@ -3391,12 +3552,18 @@ def absence_map(conn: Connection, start: date, end: date, area: str = "", turno:
     total = 0
     if not employees:
         return by_emp, total
+
+    work_days = work_days_for_filter(conn, turno)
+    attendance_sql = "SELECT DISTINCT employee_id FROM attendance WHERE shift_date=:fecha AND COALESCE(anulled,0)=0"
     for d in iter_dates(start, end):
-        # Por ahora usamos lunes-viernes como regla operativa general. Los turnos específicos se pueden afinar después sin meter otro monstruo.
-        if d.weekday() >= 5:
+        if d.isoweekday() not in work_days:
             continue
         params = {"fecha": d.isoformat()}
-        attendance_ids = {r["employee_id"] for r in fetch_all(conn, "SELECT DISTINCT employee_id FROM attendance WHERE shift_date=:fecha AND COALESCE(anulled,0)=0", params)}
+        sql = attendance_sql
+        if turno:
+            sql += " AND turno=:turno"
+            params["turno"] = turno
+        attendance_ids = {r["employee_id"] for r in fetch_all(conn, sql, params)}
         for emp in employees:
             if emp["id"] not in attendance_ids:
                 by_emp[emp["id"]] += 1
@@ -4932,6 +5099,80 @@ def qr_simple_zip(request: Request):
 # -----------------------------
 # API para vigilancia
 # -----------------------------
+
+
+def latest_vigilancia_movements(conn: Connection, limit: int = 8) -> list[dict]:
+    rows = fetch_all(
+        conn,
+        """
+        SELECT a.id, a.employee_id, e.nombre, a.entry_at, a.exit_at, a.entry_status, a.exit_status, a.updated_at
+        FROM attendance a
+        LEFT JOIN employees e ON e.id = a.employee_id
+        WHERE COALESCE(a.anulled,0)=0
+        ORDER BY a.updated_at DESC, a.id DESC
+        LIMIT :limit
+        """,
+        {"limit": max(1, min(int(limit or 8), 20))},
+    )
+    out = []
+    for row in rows:
+        exit_at = as_text(row.get("exit_at"))
+        entry_at = as_text(row.get("entry_at"))
+        if exit_at:
+            movement = "Salida"
+            status = as_text(row.get("exit_status")) or "Correcta"
+            time_value = exit_at
+        else:
+            movement = "Entrada"
+            status = as_text(row.get("entry_status")) or "Correcta"
+            time_value = entry_at
+        out.append({
+            "id": row.get("id"),
+            "employee_id": row.get("employee_id"),
+            "nombre": row.get("nombre") or row.get("employee_id"),
+            "movement": movement,
+            "status": status,
+            "time": short_datetime(time_value)[11:16] if short_datetime(time_value) else "",
+            "datetime": time_value,
+        })
+    return out
+
+
+@app.get("/api/vigilancia/ultimos")
+def api_vigilancia_ultimos(request: Request, limit: int = 8):
+    require_vigilancia_http(request)
+    with engine.begin() as conn:
+        rows = latest_vigilancia_movements(conn, limit)
+    return {"ok": True, "rows": rows}
+
+
+@app.get("/api/vigilancia/buscar")
+def api_vigilancia_buscar(request: Request, q: str = ""):
+    require_vigilancia_http(request)
+    q = as_text(q)
+    if len(q) < 2:
+        return {"ok": True, "rows": []}
+    like = f"%{q.lower()}%"
+    with engine.begin() as conn:
+        rows = fetch_all(
+            conn,
+            """
+            SELECT id, nombre, area, puesto, turno, estado, qr_activo, tiene_vehiculo
+            FROM employees
+            WHERE estado='Activo'
+              AND (
+                LOWER(nombre) LIKE :like
+                OR LOWER(COALESCE(area,'')) LIKE :like
+                OR LOWER(COALESCE(puesto,'')) LIKE :like
+                OR id LIKE :id_like
+              )
+            ORDER BY nombre
+            LIMIT 12
+            """,
+            {"like": like, "id_like": f"%{q}%"},
+        )
+    return {"ok": True, "rows": rows}
+
 
 @app.get("/api/scan/{raw_code}")
 def api_scan(request: Request, raw_code: str):

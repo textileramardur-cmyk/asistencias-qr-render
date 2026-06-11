@@ -1,0 +1,42 @@
+VERSIÓN DEPURADA Y REVISADA - CONTROL QR ASISTENCIAS
+
+Base: asistencias_qr_render_COMPLETO_FIX_CORRECCIONES_DASHBOARD.zip
+
+Correcciones incluidas:
+1. Correcciones masivas Excel:
+   - La plantilla oficial del sistema se puede reimportar aunque tenga título arriba de los encabezados.
+   - Si se cambia entrada, salida, turno o fecha turno, recalcula campos derivados:
+     entry_status, exit_status, late_minutes, early_minutes, extra_minutes,
+     scheduled_entry_at, scheduled_exit_at, límites de tolerancia, justificados y worked_minutes.
+   - Usa configuración real de turnos guardada en shift_settings.
+   - Evita dejar salida sin entrada.
+
+2. Dashboard:
+   - Presente hoy cuenta personas únicas, no registros. Esto evita duplicar personas con reentrada.
+   - Semana = semana actual.
+   - Mes = mes seleccionado del año.
+   - Rango = fecha inicio a fecha fin.
+
+3. Faltas/reportes:
+   - Faltas usa días laborales configurados en shift_settings.
+   - Si el reporte filtra por turno, las asistencias se validan contra ese turno.
+
+Pruebas realizadas antes de entregar:
+- Compilación Python: OK.
+- Importación de app FastAPI con SQLite temporal: OK.
+- Login con usuario Supremo: OK.
+- Rutas /monitor, /retardos, /rh, /configuracion y /correcciones: OK.
+- Corrección Excel de entrada tarde a correcta: OK.
+- Corrección Excel de entrada correcta a retardo: OK.
+- Corrección Excel de salida temprana: OK.
+- Corrección Excel de salida extra: OK.
+- Faltas por turno: OK.
+
+Subir a GitHub con esta estructura en raíz:
+main.py
+requirements.txt
+render.yaml
+README.md
+schema_postgresql.sql
+static/
+templates/

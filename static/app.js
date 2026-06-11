@@ -3,11 +3,16 @@ let currentPreview = null;
 let scanner = null;
 let scannerRunning = false;
 let currentMovement = 'entrada';
+let qrBusy = false;
+let noQrMode = false;
+let noQrReasonText = '';
+let feedbackTimer = null;
 
 function byId(id) { return document.getElementById(id); }
 function show(el) { if (el) el.classList.remove('hidden'); }
 function hide(el) { if (el) el.classList.add('hidden'); }
 function pad(n) { return String(n).padStart(2, '0'); }
+
 function fmtMinutesDuration(value) {
   const n = Math.max(0, Math.round(Number(value || 0)));
   const h = Math.floor(n / 60);
@@ -23,30 +28,127 @@ function fmtDateTime(value) {
   return `${pad(d.getDate())}/${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function todayTime() {
+  const d = new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function beep(kind = 'ok') {
+  try {
+    if (navigator.vibrate) navigator.vibrate(kind === 'error' ? [120, 70, 120] : 80);
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = kind === 'error' ? 180 : (kind === 'warn' ? 440 : 760);
+    gain.gain.value = 0.04;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, kind === 'error' ? 280 : 130);
+  } catch (_) {}
+}
+
+function showFeedback(kind, title, text) {
+  const overlay = byId('bigFeedback');
+  const card = overlay?.querySelector('.guard-feedback-card');
+  const icon = byId('feedbackIcon');
+  const titleEl = byId('feedbackTitle');
+  const textEl = byId('feedbackText');
+  if (!overlay || !card) return;
+  card.className = `guard-feedback-card ${kind}`;
+  if (icon) icon.innerText = kind === 'error' ? '!' : (kind === 'warn' ? '!' : '✓');
+  if (titleEl) titleEl.innerText = title || 'Listo';
+  if (textEl) textEl.innerText = text || '';
+  show(overlay);
+  beep(kind === 'error' ? 'error' : (kind === 'warn' ? 'warn' : 'ok'));
+  clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => hide(overlay), kind === 'error' ? 3600 : 2200);
+}
+
 function setMovement(movement, reload = false) {
-  currentMovement = movement;
+  currentMovement = movement || 'entrada';
   const input = byId('movementType');
-  if (input) input.value = movement;
+  if (input) input.value = currentMovement;
   const fm = byId('formMovement');
-  if (fm) fm.value = movement;
-  const autoText = byId('autoMovementText');
-  if (autoText) autoText.innerText = movement === 'entrada' ? 'Entrada' : 'Salida';
-  const autoCard = byId('autoMovementCard');
-  if (autoCard) {
-    autoCard.classList.remove('salida');
-    if (movement === 'salida') autoCard.classList.add('salida');
-  }
+  if (fm) fm.value = currentMovement;
+
   const chip = byId('movementChip');
-  if (chip) chip.innerText = movement === 'entrada' ? 'Entrada' : 'Salida';
+  if (chip) {
+    chip.innerText = currentMovement === 'entrada' ? 'Entrada' : 'Salida';
+    chip.className = 'badge ' + (currentMovement === 'entrada' ? 'ok' : 'neutral');
+  }
+  const title = byId('movementTitle');
+  if (title) title.innerText = currentMovement === 'entrada' ? 'ENTRADA' : 'SALIDA';
+  const subtitle = byId('movementSubtitle');
+  if (subtitle) subtitle.innerText = 'El sistema lo decidió automáticamente.';
+  const banner = byId('movementBanner');
+  if (banner) {
+    banner.className = 'movement-banner ' + (currentMovement === 'salida' ? 'salida' : 'entrada');
+  }
   const submit = byId('submitBtn');
-  if (submit) submit.innerText = movement === 'entrada' ? 'Registrar entrada' : 'Registrar salida';
+  if (submit) submit.innerText = currentMovement === 'entrada' ? 'CONFIRMAR ENTRADA' : 'CONFIRMAR SALIDA';
   if (reload && currentEmployee) loadEmployee();
+}
+
+function setGuardInstruction(active = true, display = '') {
+  const zone = byId('guardCameraZone');
+  const pill = byId('stepGuardPill');
+  const title = byId('stepGuardTitle');
+  const text = byId('stepGuardText');
+  const main = byId('guardMainInstruction');
+  if (zone) zone.classList.toggle('needs-guard', !active);
+  if (pill) pill.className = `step-pill ${active ? 'ok' : 'warn'}`;
+  if (title) title.innerText = active ? 'Vigilante activo' : 'Falta vigilante';
+  if (text) text.innerText = active ? 'Ya puedes escanear empleados.' : 'Escanea primero el QR del vigilante. Si no, el sistema no registra empleados.';
+  if (main) {
+    const p = main.querySelector('p');
+    const h1 = main.querySelector('h1');
+    if (p) p.innerText = active ? 'LISTO PARA CAPTURAR' : 'PASO 1';
+    if (h1) h1.innerText = active ? 'Escanea QR de empleado' : 'Escanea QR de vigilante';
+  }
 }
 
 function toggleManualPanel() {
   const panel = byId('manualPanel');
   if (!panel) return;
   panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const input = byId('employeeId');
+  if (input) setTimeout(() => input.focus(), 300);
+}
+
+function toggleNoQrPanel() {
+  const panel = byId('noQrPanel');
+  if (!panel) return;
+  panel.classList.toggle('hidden');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!panel.classList.contains('hidden')) {
+    const q = byId('noQrSearch');
+    if (q) setTimeout(() => q.focus(), 300);
+  }
+}
+
+function setQuickReason(targetId, value) {
+  const field = byId(targetId);
+  if (field) {
+    field.value = value;
+    field.dispatchEvent(new Event('change'));
+  }
+}
+
+function syncVehicleChoice() {
+  const checked = document.querySelector('input[name="vehiculo_choice"]:checked');
+  const hidden = byId('vehicleHidden');
+  if (hidden) hidden.value = checked?.value || '0';
+}
+
+function setVehicleChoice(value) {
+  const wanted = String(value ? 1 : 0);
+  const radio = document.querySelector(`input[name="vehiculo_choice"][value="${wanted}"]`);
+  if (radio) radio.checked = true;
+  syncVehicleChoice();
 }
 
 function syncPanelsByPreview() {
@@ -64,21 +166,24 @@ function paintEvaluation(preview) {
   const statusEl = byId('evalStatus');
   const detailEl = byId('evalDetail');
   if (!box || !preview) return;
-  box.className = 'status-box';
+  box.className = 'status-box guard-eval-box';
   let detail = '';
-  if (preview.requires_confirmation) {
-    box.classList.add('warn');
-  }
+  if (preview.requires_confirmation) box.classList.add('warn');
+
   if (preview.status === 'Retardo') {
     box.classList.add('warn');
-    detail = `Límite ${fmtDateTime(preview.entry_limit_at)} · ${preview.late_minutes || 0} min tarde · motivo obligatorio.`;
+    detail = `Límite ${fmtDateTime(preview.entry_limit_at)} · ${fmtMinutesDuration(preview.late_minutes || 0)} tarde · motivo obligatorio.`;
   } else if (preview.status === 'Salida temprana') {
     box.classList.add('bad');
-    detail = `Límite temprano ${fmtDateTime(preview.exit_early_limit_at)} · ${preview.early_minutes || 0} min · motivo obligatorio.`;
+    detail = `Límite temprano ${fmtDateTime(preview.exit_early_limit_at)} · ${fmtMinutesDuration(preview.early_minutes || 0)} · motivo obligatorio.`;
   } else if (preview.status === 'Extra') {
     box.classList.add('extra');
-    detail = `Salida programada ${fmtDateTime(preview.scheduled_exit_at)} · extra desde ${fmtDateTime(preview.extra_limit_at)} · ${preview.extra_minutes || 0} min.`;
+    detail = `Salida programada ${fmtDateTime(preview.scheduled_exit_at)} · extra desde ${fmtDateTime(preview.extra_limit_at)} · ${fmtMinutesDuration(preview.extra_minutes || 0)}.`;
+  } else if (preview.status === 'Reentrada') {
+    box.classList.add('warn');
+    detail = preview.message || 'Ya tuvo movimiento en este turno. Se pedirá confirmación.';
   } else {
+    box.classList.add('ok');
     detail = `Horario OK · entrada límite ${fmtDateTime(preview.entry_limit_at)} · extra después de ${fmtDateTime(preview.extra_limit_at)}.`;
   }
   statusEl.innerText = preview.requires_confirmation ? `${preview.status || '-'} · requiere confirmación` : (preview.status || '-');
@@ -102,37 +207,50 @@ function updateActiveGuardBox(activeGuard) {
   box.classList.remove('missing');
   name.innerText = activeGuard.display || activeGuard.guard_display || 'Vigilante activo';
   since.innerText = activeGuard.started_at ? `Desde ${fmtDateTime(activeGuard.started_at)}` : 'Turno de vigilancia activo';
+  setGuardInstruction(true, name.innerText);
 }
 
 async function scanCode() {
-  const code = byId('employeeId').value.trim();
+  const input = byId('employeeId');
+  const code = input?.value.trim() || '';
   const resultBox = byId('resultBox');
   if (resultBox) hide(resultBox);
-  if (!code) return;
+  if (!code || qrBusy) return;
+  qrBusy = true;
+  const status = byId('scannerStatus');
+  if (status) status.innerText = 'Validando código...';
 
-  const res = await fetch(`/api/scan/${encodeURIComponent(code)}`);
-  const data = await parseJsonResponse(res);
-  if (!data.ok) {
-    alert(data.message || 'Código no válido');
-    return;
+  try {
+    const res = await fetch(`/api/scan/${encodeURIComponent(code)}`);
+    const data = await parseJsonResponse(res);
+    if (!data.ok) {
+      showFeedback('error', 'NO SE REGISTRÓ', data.message || 'Código no válido');
+      if (status) status.innerText = data.message || 'Código no válido';
+      return;
+    }
+
+    if (data.type === 'guard') {
+      updateActiveGuardBox(data.active_guard);
+      if (status) status.innerText = data.message || 'Vigilante activo actualizado';
+      if (input) input.value = '';
+      currentEmployee = null;
+      currentPreview = null;
+      hide(byId('employeeCard'));
+      showFeedback('ok', 'VIGILANTE ACTIVO', data.active_guard?.display || data.message || 'Listo');
+      return;
+    }
+
+    paintEmployeeData(data);
+    if (status) status.innerText = `${data.employee?.nombre || 'Empleado'} detectado. Confirma el movimiento.`;
+    beep('ok');
+  } catch (err) {
+    showFeedback('error', 'ERROR', 'No se pudo validar el código. Revisa conexión.');
+  } finally {
+    setTimeout(() => { qrBusy = false; }, 900);
   }
-
-  if (data.type === 'guard') {
-    updateActiveGuardBox(data.active_guard);
-    const status = byId('scannerStatus');
-    if (status) status.innerText = data.message || 'Vigilante activo actualizado';
-    byId('employeeId').value = '';
-    currentEmployee = null;
-    currentPreview = null;
-    hide(byId('employeeCard'));
-    return;
-  }
-
-  paintEmployeeData(data);
 }
 
 async function loadEmployee() {
-  // Compatibilidad con botones viejos: ahora cualquier código pasa por el scanner inteligente.
   return scanCode();
 }
 
@@ -155,29 +273,44 @@ function paintEmployeeData(data) {
   status.innerText = currentEmployee.estado;
   status.className = 'badge ' + (currentEmployee.estado === 'Activo' ? 'ok' : 'bad');
 
-  const vehicleCheck = byId('vehicleCheck');
-  if (vehicleCheck) vehicleCheck.checked = Boolean(currentEmployee.tiene_vehiculo);
-
+  setVehicleChoice(Boolean(currentEmployee.tiene_vehiculo));
   paintEvaluation(currentPreview);
   byId('employeeCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function cancelEmployee() {
+  const form = byId('attendanceForm');
+  if (form) form.reset();
+  byId('employeeId').value = '';
+  currentEmployee = null;
+  currentPreview = null;
+  noQrMode = false;
+  noQrReasonText = '';
+  hide(byId('employeeCard'));
+  setMovement('entrada', false);
+  const status = byId('scannerStatus');
+  if (status) status.innerText = 'Cancelado. Escanea el siguiente QR.';
+}
 
 async function submitAttendance(event) {
   event.preventDefault();
   const form = event.target;
   byId('formMovement').value = currentMovement;
 
+  if (!currentEmployee) {
+    showFeedback('error', 'FALTA EMPLEADO', 'Escanea o busca un empleado antes de confirmar.');
+    return;
+  }
   if (currentPreview?.status === 'Retardo' && !byId('lateReason').value) {
-    alert('Hay retardo. El motivo es obligatorio. Triste, pero razonable.');
+    showFeedback('warn', 'FALTA MOTIVO', 'Hay retardo. Selecciona un motivo.');
     return;
   }
   if (currentPreview?.status === 'Salida temprana' && !byId('earlyReason').value) {
-    alert('Hay salida temprana. El motivo es obligatorio.');
+    showFeedback('warn', 'FALTA MOTIVO', 'Hay salida temprana. Selecciona un motivo.');
     return;
   }
   if (currentPreview?.status === 'Salida temprana' && !byId('lunchTaken').value) {
-    alert('Salida temprana: indica si tomó su hora de comida.');
+    showFeedback('warn', 'FALTA COMIDA', 'Indica si tomó su hora de comida.');
     return;
   }
 
@@ -189,41 +322,72 @@ async function submitAttendance(event) {
     if (confirmInput) confirmInput.value = 'CONFIRMAR';
   }
 
+  const obs = byId('observaciones');
+  if (noQrMode) {
+    const reason = noQrReasonText || byId('noQrReason')?.value || '';
+    if (!reason) {
+      showFeedback('warn', 'FALTA MOTIVO', 'Para Sin QR el motivo es obligatorio.');
+      return;
+    }
+    const prefix = `SIN QR: ${reason}`;
+    obs.value = obs.value && !obs.value.startsWith('SIN QR:') ? `${prefix}. ${obs.value}` : prefix;
+  }
+
   const resultBox = byId('resultBox');
   resultBox.className = 'result hidden';
-
   const formData = new FormData(form);
-  if (!byId('vehicleCheck')?.checked) formData.set('vehiculo', '0');
+  syncVehicleChoice();
+  formData.set('vehiculo', byId('vehicleHidden')?.value || '0');
 
-  const res = await fetch('/api/registro', { method: 'POST', body: formData });
-  const data = await parseJsonResponse(res);
+  const submit = byId('submitBtn');
+  if (submit) { submit.disabled = true; submit.innerText = 'GUARDANDO...'; }
 
-  resultBox.className = 'result ' + (data.ok ? 'ok' : 'error');
-  resultBox.innerText = data.message || (data.ok ? 'Registro guardado' : 'No se pudo registrar');
+  try {
+    const res = await fetch('/api/registro', { method: 'POST', body: formData });
+    const data = await parseJsonResponse(res);
 
-  if (data.ok) {
-    form.reset();
-    byId('employeeId').value = '';
-    currentEmployee = null;
-    currentPreview = null;
-    hide(byId('employeeCard'));
-    setMovement('entrada', false);
-    byId('scannerStatus').innerText = data.message;
+    resultBox.className = 'result ' + (data.ok ? 'ok' : 'error');
+    resultBox.innerText = data.message || (data.ok ? 'Registro guardado' : 'No se pudo registrar');
+
+    if (data.ok) {
+      const movementWord = currentMovement === 'entrada' ? 'ENTRADA REGISTRADA' : 'SALIDA REGISTRADA';
+      const kind = data.status === 'Retardo' || data.status === 'Salida temprana' || data.status === 'Reentrada' ? 'warn' : 'ok';
+      showFeedback(kind, movementWord, `${currentEmployee.nombre} · ${todayTime()} · ${data.message || data.status || 'OK'}`);
+      form.reset();
+      byId('employeeId').value = '';
+      currentEmployee = null;
+      currentPreview = null;
+      noQrMode = false;
+      noQrReasonText = '';
+      hide(byId('employeeCard'));
+      setMovement('entrada', false);
+      const status = byId('scannerStatus');
+      if (status) status.innerText = 'Registro guardado. Escanea el siguiente empleado.';
+      loadLastMovements();
+    } else {
+      showFeedback('error', 'NO SE REGISTRÓ', data.message || 'No se pudo registrar');
+    }
+  } catch (err) {
+    showFeedback('error', 'ERROR', 'No se pudo guardar. Revisa conexión.');
+  } finally {
+    if (submit) { submit.disabled = false; setMovement(currentMovement, false); }
   }
 }
 
 async function toggleScanner() {
   const readerId = 'reader';
   const status = byId('scannerStatus');
+  const btnText = byId('cameraButtonText');
   if (scannerRunning && scanner) {
     await scanner.stop();
     scannerRunning = false;
+    if (btnText) btnText.innerText = 'Activar cámara';
     if (status) status.innerText = 'Cámara detenida. Puedes capturar ID manual.';
     return;
   }
 
   if (!window.Html5Qrcode) {
-    alert('No cargó el lector QR. Usa captura manual del ID. La web siendo la web, una historia vieja.');
+    showFeedback('error', 'CÁMARA NO DISPONIBLE', 'Usa captura manual del ID.');
     return;
   }
 
@@ -232,18 +396,89 @@ async function toggleScanner() {
     await scanner.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 280, height: 280 } },
-      (decodedText) => {
+      async (decodedText) => {
+        if (qrBusy) return;
         byId('employeeId').value = decodedText.trim();
-        if (status) status.innerText = `QR leído: ${decodedText.trim()}`;
-        scanCode();
-        scanner.stop();
+        if (status) status.innerText = `QR leído. Validando...`;
+        await scanCode();
+        try { await scanner.stop(); } catch (_) {}
         scannerRunning = false;
+        if (btnText) btnText.innerText = 'Activar cámara';
       }
     );
     scannerRunning = true;
+    if (btnText) btnText.innerText = 'Detener cámara';
     if (status) status.innerText = 'Cámara activa. Centra el QR en el marco.';
   } catch (err) {
     if (status) status.innerText = 'No se pudo abrir cámara. Revisa permisos o usa ID manual.';
-    alert('No se pudo abrir la cámara. Revisa permisos del navegador. También puedes escribir el ID manualmente.');
+    showFeedback('error', 'SIN CÁMARA', 'Revisa permisos del navegador o escribe el ID manualmente.');
   }
+}
+
+async function loadLastMovements() {
+  const box = byId('lastMovementsList');
+  if (!box) return;
+  try {
+    const res = await fetch('/api/vigilancia/ultimos');
+    const data = await parseJsonResponse(res);
+    if (!data.ok || !data.rows?.length) {
+      box.innerHTML = '<div class="last-empty">Aún no hay movimientos recientes.</div>';
+      return;
+    }
+    box.innerHTML = data.rows.map(row => {
+      const cls = row.status === 'Retardo' || row.status === 'Salida temprana' ? 'warn' : (row.movement === 'Salida' ? 'exit' : 'entry');
+      return `<div class="last-movement-item ${cls}">
+        <div><strong>${row.time || '-'}</strong><small>${row.movement || '-'}</small></div>
+        <span>${row.nombre || row.employee_id}</span>
+        <em>${row.status || 'OK'}</em>
+      </div>`;
+    }).join('');
+  } catch (_) {
+    box.innerHTML = '<div class="last-empty">No se pudieron cargar los últimos movimientos.</div>';
+  }
+}
+
+async function searchNoQrEmployees() {
+  const q = byId('noQrSearch')?.value.trim() || '';
+  const reason = byId('noQrReason')?.value || '';
+  const out = byId('noQrResults');
+  if (!out) return;
+  if (!reason) {
+    showFeedback('warn', 'FALTA MOTIVO', 'Selecciona primero el motivo de Sin QR.');
+    return;
+  }
+  if (q.length < 2) {
+    out.innerHTML = '<div class="last-empty">Escribe mínimo 2 caracteres.</div>';
+    return;
+  }
+  out.innerHTML = '<div class="last-empty">Buscando...</div>';
+  try {
+    const res = await fetch(`/api/vigilancia/buscar?q=${encodeURIComponent(q)}`);
+    const data = await parseJsonResponse(res);
+    if (!data.ok || !data.rows?.length) {
+      out.innerHTML = '<div class="last-empty">Sin resultados.</div>';
+      return;
+    }
+    out.innerHTML = data.rows.map(emp => `<button class="noqr-result" type="button" onclick="selectNoQrEmployee('${String(emp.id).replace(/'/g, '')}', '${String(emp.nombre || '').replace(/'/g, '')}')">
+      <strong>${emp.nombre}</strong><span>ID ${emp.id} · ${emp.area || 'Sin área'} · ${emp.turno || '-'}</span>
+    </button>`).join('');
+  } catch (_) {
+    out.innerHTML = '<div class="last-empty">Error buscando empleados.</div>';
+  }
+}
+
+async function selectNoQrEmployee(id, name) {
+  const reason = byId('noQrReason')?.value || '';
+  if (!reason) {
+    showFeedback('warn', 'FALTA MOTIVO', 'Selecciona el motivo de Sin QR.');
+    return;
+  }
+  noQrMode = true;
+  noQrReasonText = reason;
+  byId('employeeId').value = id;
+  const obs = byId('observaciones');
+  if (obs) obs.value = `SIN QR: ${reason}`;
+  await scanCode();
+  const status = byId('scannerStatus');
+  if (status) status.innerText = `Sin QR: ${name || id}. Confirma el movimiento.`;
 }

@@ -1,0 +1,26 @@
+VERSION UX VIGILANCIA
+
+Base: ZIP depurado estable anterior.
+
+Incluye:
+- Pantalla de vigilancia tipo semaforo.
+- Estado claro: falta vigilante / vigilante activo / empleado detectado.
+- Botones grandes: activar camara, ID manual, Sin QR.
+- Confirmacion visual grande al guardar entrada/salida/error.
+- Sonido/vibracion cuando el navegador lo permite.
+- Ultimos movimientos en pantalla.
+- Motivos rapidos para retardo y salida temprana.
+- Vehiculo simplificado como pregunta No/Si.
+- Flujo Sin QR con busqueda por nombre/ID y motivo obligatorio.
+- Endpoints nuevos: /api/vigilancia/ultimos y /api/vigilancia/buscar.
+
+Estructura correcta para GitHub:
+main.py
+requirements.txt
+render.yaml
+README.md
+schema_postgresql.sql
+static/
+templates/
+
+No incluye data/, __pycache__ ni carpetas temporales.
