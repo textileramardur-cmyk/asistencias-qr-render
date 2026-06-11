@@ -90,5 +90,76 @@
     <a class="btn secondary" href="/recalcular">Recalcular asistencias</a>
   </article>
 
+
+
+  <article class="card config-card">
+    <h3>Estado real en planta</h3>
+    <p>Marca manualmente si una persona está dentro o fuera. Sirve cuando una importación no dejó entradas abiertas o hubo captura accidental.</p>
+    {% if estado_error %}<div class="alert bad">{{ estado_error }}</div>{% endif %}
+    {% if estado_result %}<div class="alert ok">{{ estado_result.mensaje }}</div>{% endif %}
+    <form method="post" action="/configuracion/estado-planta" class="form-stack">
+      <label>ID empleado
+        <input name="employee_id" value="{{ estado_employee_id or '' }}" inputmode="numeric" placeholder="Ej. 15">
+      </label>
+      <label>Acción
+        <select name="accion">
+          <option value="dentro" {% if (estado_accion or 'dentro') == 'dentro' %}selected{% endif %}>Marcar dentro de planta</option>
+          <option value="fuera" {% if estado_accion == 'fuera' %}selected{% endif %}>Marcar fuera de planta</option>
+        </select>
+      </label>
+      <label>Fecha turno
+        <input type="date" name="fecha" value="{{ estado_fecha or today }}">
+      </label>
+      <label>Turno
+        <select name="turno">
+          <option value="">Usar turno del empleado</option>
+          {% for t in turnos %}
+            <option value="{{ t.name }}" {% if estado_turno == t.name %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Hora a aplicar
+        <input type="time" name="hora" value="{{ estado_hora or '' }}" placeholder="Opcional">
+      </label>
+      <label>Confirmación
+        <input name="confirmacion" placeholder="Escribe CONFIRMAR para aplicar">
+      </label>
+      <button class="btn secondary" type="submit">Aplicar estado</button>
+    </form>
+    <p class="muted tiny">Si marcas dentro, el siguiente escaneo del QR será salida. Si marcas fuera, se cierra la entrada abierta.</p>
+  </article>
+
+  <article class="card config-card danger-zone">
+    <h3>Cierre seguro de salidas</h3>
+    <p>Úsalo cuando el sistema no detectó entradas abiertas por una importación o cuando se capturaron entradas accidentales en la hora de salida.</p>
+    {% if cierre_error %}<div class="alert bad">{{ cierre_error }}</div>{% endif %}
+    {% if cierre_result %}
+      <div class="alert ok">
+        <strong>Cierre aplicado:</strong><br>
+        Revisados: {{ cierre_result.revisados }} · Cerrados: {{ cierre_result.cerrados }} · Entradas accidentales anuladas: {{ cierre_result.anulados_accidentales }} · Ya cerrados: {{ cierre_result.ya_cerrados }}
+      </div>
+    {% endif %}
+    <form method="post" action="/configuracion/cierre-seguro" class="form-stack">
+      <label>Fecha turno
+        <input type="date" name="fecha" value="{{ cierre_fecha or today }}">
+      </label>
+      <label>Turno
+        <select name="turno">
+          {% for t in turnos %}
+            <option value="{{ t.name }}" {% if (cierre_turno or 'Día') == t.name %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Hora de salida a aplicar
+        <input type="time" name="hora_salida" value="{{ cierre_hora or '19:00' }}">
+      </label>
+      <label>Confirmación
+        <input name="confirmacion" placeholder="Escribe CERRAR para aplicar">
+      </label>
+      <button class="btn danger" type="submit">Cerrar salidas del turno</button>
+    </form>
+    <p class="muted tiny">No crea entradas nuevas. Anula entradas accidentales en ventana de salida si ya existe un registro previo del mismo empleado.</p>
+  </article>
+
 </section>
 {% endblock %}

@@ -1215,3 +1215,29 @@ th { color: var(--azul); background: #f8fafc; }
   .dashboard-filter-actions .btn { width: 100%; }
   .rank-item { grid-template-columns: 38px 1fr auto; }
 }
+
+/* Control manual desde dashboard */
+.manual-entry-form {
+  display: grid;
+  grid-template-columns: minmax(96px, .7fr) minmax(120px, .8fr) minmax(180px, 1.2fr) auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 620px;
+}
+.manual-entry-form input,
+.manual-entry-form select {
+  margin-top: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.manual-entry-form .btn {
+  min-height: 38px;
+  white-space: nowrap;
+}
+@media (max-width: 920px) {
+  .manual-entry-form {
+    grid-template-columns: 1fr;
+    min-width: 240px;
+  }
+}

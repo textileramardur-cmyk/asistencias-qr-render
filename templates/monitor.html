@@ -12,6 +12,12 @@
   </div>
 </section>
 
+{% if request.query_params.get('manual') == 'entrada_ok' %}
+<div class="alert ok">
+  Entrada manual registrada. La persona quedó activa dentro de planta y su siguiente escaneo será salida.
+</div>
+{% endif %}
+
 <section class="dashboard-section">
   <div class="dashboard-top-kpis">
     <div class="kpi"><small>Empleados activos</small><strong>{{ total_employees }}</strong><span class="kpi-note">Plantilla disponible</span></div>
@@ -57,7 +63,7 @@
     <div class="kpi mini"><small>Mes: retardos</small><strong>{{ month_stats.retardos }}</strong><span class="kpi-note">Faltas {{ month_stats.faltas }}</span></div>
     <div class="kpi mini"><small>Año: retardos</small><strong>{{ year_stats.retardos }}</strong><span class="kpi-note">Faltas {{ year_stats.faltas }}</span></div>
     <div class="kpi mini"><small>Periodo</small><strong>{{ period_label }}</strong><span class="kpi-note">Consulta activa</span></div>
-    <div class="kpi mini"><small>Min. retardo</small><strong>{{ period_stats.min_retardo }}</strong><span class="kpi-note">Acumulados en el periodo</span></div>
+    <div class="kpi mini"><small>Retardo</small><strong>{{ fmt_minutes(period_stats.min_retardo) }}</strong><span class="kpi-note">Acumulados en el periodo</span></div>
     <div class="kpi mini"><small>Salidas tempranas</small><strong>{{ period_stats.tempranas }}</strong><span class="kpi-note">{{ period_stats.min_temprano }} min</span></div>
   </div>
 </section>
@@ -103,7 +109,7 @@
           <strong>{{ r.nombre }}</strong>
           <small>ID {{ r.employee_id }}</small>
         </div>
-        <div class="rank-value">{{ r.min_retardo or 0 }} min</div>
+        <div class="rank-value">{{ fmt_minutes(r.min_retardo) }}</div>
       </div>
       {% else %}
       <div class="rank-empty">Sin retardos en el periodo.</div>
@@ -150,7 +156,7 @@
     </div>
     <div class="table-wrap clean-table">
       <table>
-        <thead><tr><th>ID</th><th>Empleado</th><th>Área</th><th>Puesto</th><th>Turno</th></tr></thead>
+        <thead><tr><th>ID</th><th>Empleado</th><th>Área</th><th>Puesto</th><th>Turno</th><th>Entrada manual</th></tr></thead>
         <tbody>
           {% for row in absent_today %}
           <tr>
@@ -159,8 +165,21 @@
             <td>{{ row.area or '-' }}</td>
             <td>{{ row.puesto or '-' }}</td>
             <td>{{ row.turno or '-' }}</td>
+            <td>
+              <form method="post" action="/manual/entrada" class="manual-entry-form">
+                <input type="hidden" name="employee_id" value="{{ row.id }}">
+                <input type="hidden" name="fecha" value="{{ today }}">
+                <input type="time" name="hora_entrada" value="08:00" required>
+                <select name="vehiculo">
+                  <option value="0">Sin vehículo</option>
+                  <option value="1">Con vehículo</option>
+                </select>
+                <input name="motivo" placeholder="Motivo obligatorio" required>
+                <button class="btn small primary" type="submit">Marcar dentro</button>
+              </form>
+            </td>
           </tr>
-          {% else %}<tr><td colspan="5">No hay personas activas sin registro hoy.</td></tr>{% endfor %}
+          {% else %}<tr><td colspan="6">No hay personas activas sin registro hoy.</td></tr>{% endfor %}
         </tbody>
       </table>
     </div>
@@ -176,7 +195,7 @@
     </div>
     <div class="table-wrap clean-table">
       <table>
-        <thead><tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Min retardo</th><th>Min extra</th><th>Motivo</th></tr></thead>
+        <thead><tr><th>Empleado</th><th>Fecha turno</th><th>Entrada</th><th>Salida</th><th>Retardo</th><th>Min extra</th><th>Motivo</th></tr></thead>
         <tbody>
           {% for row in incidents %}
           <tr>
@@ -184,7 +203,7 @@
             <td>{{ row.shift_date }}</td>
             <td>{{ row.entry_status or '-' }}</td>
             <td>{{ row.exit_status or '-' }}</td>
-            <td>{{ row.late_minutes or 0 }}</td>
+            <td>{{ fmt_minutes(row.late_minutes) }}</td>
             <td>{{ row.extra_minutes or 0 }}</td>
             <td>{{ row.late_reason or row.early_reason or row.incident or '-' }}</td>
           </tr>

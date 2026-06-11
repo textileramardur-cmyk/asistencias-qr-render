@@ -15,7 +15,7 @@
   <div class="kpi"><small>Presentes</small><strong>{{ summary.presentes }}</strong></div>
   <div class="kpi"><small>Faltas / sin registro</small><strong>{{ summary.faltas }}</strong></div>
   <div class="kpi"><small>Retardos</small><strong>{{ summary.retardos }}</strong></div>
-  <div class="kpi"><small>Min. retardo</small><strong>{{ summary.min_retardo }}</strong></div>
+  <div class="kpi"><small>Retardo</small><strong>{{ fmt_minutes(summary.min_retardo) }}</strong></div>
   <div class="kpi"><small>Extras</small><strong>{{ summary.extras }}</strong></div>
   <div class="kpi"><small>Salidas tempranas</small><strong>{{ summary.salidas_tempranas }}</strong></div>
   <div class="kpi"><small>Pendientes revisión</small><strong>{{ summary.pendientes_revision }}</strong></div>
@@ -25,7 +25,7 @@
   <h3>Asistencia del día · {{ fecha }}</h3>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Estado entrada</th><th>Estado salida</th><th>Min retardo</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Estado entrada</th><th>Estado salida</th><th>Retardo</th><th>Motivo</th></tr></thead>
       <tbody>
       {% for r in daily_rows %}
         <tr>
@@ -36,7 +36,7 @@
           <td>{{ short_datetime(r.exit_at) }}</td>
           <td><span class="badge {{ 'bad' if r.entry_status in ['Tarde','Retardo'] else 'ok' }}">{{ r.entry_status or '—' }}</span></td>
           <td><span class="badge {{ 'warn' if r.exit_status in ['Salida temprana','Extra','Salida provisional'] else 'ok' }}">{{ r.exit_status or '—' }}</span></td>
-          <td>{{ r.late_minutes or 0 }}</td>
+          <td>{{ fmt_minutes(r.late_minutes) }}</td>
           <td>{{ r.late_reason or r.early_reason or '' }}</td>
         </tr>
       {% else %}
@@ -79,7 +79,7 @@
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Registros</th><th>Retardos</th><th>Min retardo</th><th>Salidas tempranas</th><th>Extras</th><th>Min extra</th><th>Pendientes</th></tr></thead>
+      <thead><tr><th>Empleado</th><th>Área</th><th>Turno</th><th>Registros</th><th>Retardos</th><th>Retardo</th><th>Salidas tempranas</th><th>Extras</th><th>Min extra</th><th>Pendientes</th></tr></thead>
       <tbody>
       {% for r in weekly_rows %}
         <tr>
@@ -88,7 +88,7 @@
           <td>{{ r.turno }}</td>
           <td>{{ r.registros or 0 }}</td>
           <td>{{ r.retardos or 0 }}</td>
-          <td>{{ r.min_retardo or 0 }}</td>
+          <td>{{ fmt_minutes(r.min_retardo) }}</td>
           <td>{{ r.salidas_tempranas or 0 }}</td>
           <td>{{ r.extras or 0 }}</td>
           <td>{{ r.min_extra or 0 }}</td>

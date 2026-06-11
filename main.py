@@ -41,6 +41,9 @@ SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "1") == "1"
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "6"))
 LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
 MIN_EXIT_AFTER_ENTRY_MINUTES = int(os.getenv("MIN_EXIT_AFTER_ENTRY_MINUTES", "5"))
+EXIT_WINDOW_BEFORE_MINUTES = int(os.getenv("EXIT_WINDOW_BEFORE_MINUTES", "180"))
+EXIT_WINDOW_AFTER_MINUTES = int(os.getenv("EXIT_WINDOW_AFTER_MINUTES", "240"))
+ACCIDENTAL_EXIT_ENTRY_BEFORE_MINUTES = int(os.getenv("ACCIDENTAL_EXIT_ENTRY_BEFORE_MINUTES", "120"))
 # Usuarios semilla solicitados para beta. Se guardan con hash, no en texto plano en la base.
 DEFAULT_SYSTEM_USERS = [
     {"username": "Adjm", "password": "Adjm4rdur", "role": "Supremo", "display_name": "Usuario Supremo"},
@@ -824,6 +827,273 @@ def evaluate_exit(config: dict, shift_date_iso: str, dt: datetime) -> dict:
 
 
 
+
+def is_open_attendance_row(row: Optional[dict]) -> bool:
+    if not row:
+        return False
+    return as_text(row.get("exit_at")).strip() == ""
+
+
+def open_attendance_sql(alias: str = "") -> str:
+    field = f"{alias}.exit_at" if alias else "exit_at"
+    return f"({field} IS NULL OR TRIM(COALESCE({field}, '')) = '')"
+
+
+def find_open_attendance(conn: Connection, employee_id: str) -> Optional[dict]:
+    return fetch_one(
+        conn,
+        f"""
+        SELECT * FROM attendance
+        WHERE employee_id = :employee_id
+          AND COALESCE(anulled,0)=0
+          AND {open_attendance_sql()}
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        {"employee_id": employee_id},
+    )
+
+
+def find_latest_shift_attendance(conn: Connection, employee_id: str, shift_date: str, turno: str = "") -> Optional[dict]:
+    params = {"employee_id": employee_id, "shift_date": shift_date}
+    clause = ""
+    if turno:
+        clause = " AND turno = :turno"
+        params["turno"] = turno
+    return fetch_one(
+        conn,
+        f"""
+        SELECT * FROM attendance
+        WHERE employee_id = :employee_id
+          AND shift_date = :shift_date
+          {clause}
+          AND COALESCE(anulled,0)=0
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        params,
+    )
+
+
+def is_exit_window(config: dict, shift_date_iso: str, dt: datetime) -> bool:
+    _start_dt, end_dt = schedule_times_from_config(config, shift_date_iso)
+    return (end_dt - timedelta(minutes=EXIT_WINDOW_BEFORE_MINUTES)) <= dt <= (end_dt + timedelta(minutes=EXIT_WINDOW_AFTER_MINUTES))
+
+
+def build_entry_confirmation(config: dict, shift_date: str, dt: datetime, latest: Optional[dict] = None) -> Optional[dict]:
+    """Devuelve una advertencia cuando la entrada requiere doble confirmación.
+
+    No bloquea turno noche: la ventana se calcula contra el turno del empleado.
+    Si alguien realmente entra a las 19:00 porque es turno noche, su turno no estará en ventana de salida.
+    """
+    _start_dt, end_dt = schedule_times_from_config(config, shift_date)
+    reasons = []
+    if latest and not is_open_attendance_row(latest):
+        reasons.append("este empleado ya tiene un registro cerrado para este día")
+    if is_exit_window(config, shift_date, dt):
+        reasons.append(f"estás cerca de la salida programada del turno ({end_dt.strftime('%H:%M')})")
+    if not reasons:
+        return None
+    return {
+        "requires_confirmation": True,
+        "confirmation_code": "CONFIRMAR",
+        "reason": "; ".join(reasons),
+        "message": "Confirmación requerida: " + "; ".join(reasons) + ". Si realmente es una nueva entrada/reentrada, confirma antes de guardar.",
+    }
+
+
+def entry_confirmation_required_response(config: dict, shift_date: str, dt: datetime, latest: Optional[dict] = None) -> JSONResponse:
+    info = build_entry_confirmation(config, shift_date, dt, latest) or {}
+    return JSONResponse(
+        status_code=409,
+        content={
+            "ok": False,
+            "requires_confirmation": True,
+            "message": info.get("message") or "Confirmación requerida para registrar esta entrada.",
+            "shift_date": shift_date,
+        },
+    )
+
+
+
+def close_shift_day_safely(conn: Connection, shift_date: str, turno: str, exit_time_value: str, user_name: str) -> dict:
+    """Cierra salidas de un turno/día sin inventar entradas.
+
+    1. Anula entradas accidentales creadas en ventana de salida cuando ya existe un registro
+       anterior del mismo empleado para el mismo día.
+    2. Cierra registros abiertos usando la hora de salida indicada.
+    3. Deja sin tocar registros que no puede interpretar con seguridad.
+    """
+    shift_date = as_text(shift_date)
+    turno = as_text(turno) or "Día"
+    if not shift_date:
+        shift_date = now_mx().date().isoformat()
+    config = get_shift_config(conn, turno)
+    start_dt, scheduled_end_dt = schedule_times_from_config(config, shift_date)
+    exit_t = parse_time_value(exit_time_value, scheduled_end_dt.time())
+    exit_day = date.fromisoformat(shift_date) + timedelta(days=1) if bool(config.get("crosses_midnight")) else date.fromisoformat(shift_date)
+    close_dt = datetime.combine(exit_day, exit_t, tzinfo=TZ)
+    ts = now_mx().isoformat()
+    result = {
+        "fecha": shift_date,
+        "turno": turno,
+        "hora_salida": close_dt.strftime("%H:%M"),
+        "revisados": 0,
+        "anulados_accidentales": 0,
+        "cerrados": 0,
+        "ya_cerrados": 0,
+        "sin_entrada": 0,
+        "omitidos": 0,
+        "mensajes": [],
+    }
+
+    records = fetch_all(
+        conn,
+        """
+        SELECT * FROM attendance
+        WHERE shift_date = :shift_date
+          AND turno = :turno
+          AND COALESCE(anulled,0)=0
+        ORDER BY employee_id, id
+        """,
+        {"shift_date": shift_date, "turno": turno},
+    )
+    result["revisados"] = len(records)
+
+    by_emp = {}
+    for r in records:
+        by_emp.setdefault(r["employee_id"], []).append(r)
+
+    accidental_ids = set()
+    accidental_from = close_dt - timedelta(minutes=ACCIDENTAL_EXIT_ENTRY_BEFORE_MINUTES)
+    prior_cutoff = close_dt - timedelta(minutes=60)
+
+    for emp_id, emp_records in by_emp.items():
+        prior_records = []
+        for r in emp_records:
+            entry_dt = parse_dt(r.get("entry_at") or "")
+            if entry_dt and entry_dt < prior_cutoff:
+                prior_records.append(r)
+
+        if not prior_records:
+            continue
+
+        for r in emp_records:
+            entry_dt = parse_dt(r.get("entry_at") or "")
+            if not entry_dt:
+                continue
+            if is_open_attendance_row(r) and entry_dt >= accidental_from:
+                accidental_ids.add(r["id"])
+
+    for rid in accidental_ids:
+        old = fetch_one(conn, "SELECT * FROM attendance WHERE id=:id", {"id": rid})
+        if not old:
+            continue
+        incident = as_text(old.get("incident"))
+        note = "ANULADO: entrada accidental capturada en ventana de salida; ya existía registro previo del mismo día."
+        new_incident = (incident + " | " + note).strip(" |") if incident else note
+        conn.execute(
+            text("""
+            UPDATE attendance
+            SET anulled=1,
+                review_required=1,
+                review_status='Anulado por cierre seguro',
+                incident=:incident,
+                updated_at=:updated_at
+            WHERE id=:id
+            """),
+            {"id": rid, "incident": new_incident, "updated_at": ts},
+        )
+        audit(conn, "attendance", str(rid), "ANUL_ACCIDENTAL_EXIT_ENTRY", user_name, reason=note)
+        result["anulados_accidentales"] += 1
+
+    open_rows = fetch_all(
+        conn,
+        f"""
+        SELECT * FROM attendance
+        WHERE shift_date = :shift_date
+          AND turno = :turno
+          AND COALESCE(anulled,0)=0
+          AND {open_attendance_sql()}
+        ORDER BY employee_id, id
+        """,
+        {"shift_date": shift_date, "turno": turno},
+    )
+
+    for row in open_rows:
+        entry_dt = parse_dt(row.get("entry_at") or "")
+        if not entry_dt:
+            result["sin_entrada"] += 1
+            continue
+
+        eval_data = evaluate_exit(config, shift_date, close_dt)
+        status = eval_data["status"]
+        lunch_value = "SI"
+        worked_minutes, lunch_value, payroll_note = compute_worked_minutes(
+            row.get("entry_at"), close_dt.isoformat(), eval_data.get("scheduled_entry_at"), eval_data.get("scheduled_exit_at"), lunch_value, status
+        )
+        incident = as_text(row.get("incident"))
+        note = "Salida cerrada por cierre seguro administrativo."
+        if payroll_note:
+            note += f" {payroll_note}"
+        new_incident = (incident + " | " + note).strip(" |") if incident else note
+
+        conn.execute(
+            text("""
+            UPDATE attendance
+            SET exit_at=:exit_at,
+                exit_guard=:exit_guard,
+                exit_status=:exit_status,
+                early_reason=:early_reason,
+                scheduled_entry_at=COALESCE(NULLIF(scheduled_entry_at, ''), :scheduled_entry_at),
+                scheduled_exit_at=COALESCE(NULLIF(scheduled_exit_at, ''), :scheduled_exit_at),
+                entry_limit_at=COALESCE(NULLIF(entry_limit_at, ''), :entry_limit_at),
+                exit_early_limit_at=:exit_early_limit_at,
+                extra_limit_at=:extra_limit_at,
+                entry_tolerance_minutes=:entry_tolerance_minutes,
+                exit_tolerance_minutes=:exit_tolerance_minutes,
+                extra_after_minutes=:extra_after_minutes,
+                early_minutes=:early_minutes,
+                extra_minutes=:extra_minutes,
+                lunch_taken=:lunch_taken,
+                worked_minutes=:worked_minutes,
+                incident=:incident,
+                updated_at=:updated_at
+            WHERE id=:id
+            """),
+            {
+                "id": row["id"],
+                "exit_at": close_dt.isoformat(),
+                "exit_guard": f"CIERRE SEGURO / {user_name}",
+                "exit_status": status,
+                "early_reason": "",
+                "lunch_taken": lunch_value,
+                "worked_minutes": worked_minutes,
+                "incident": new_incident,
+                "updated_at": ts,
+                **eval_data,
+            },
+        )
+        audit(conn, "attendance", str(row["id"]), "SAFE_SHIFT_CLOSE", user_name, reason=f"Cierre seguro {shift_date} {turno} {close_dt.strftime('%H:%M')}")
+        result["cerrados"] += 1
+
+    total_closed = fetch_all(
+        conn,
+        f"""
+        SELECT id FROM attendance
+        WHERE shift_date = :shift_date
+          AND turno = :turno
+          AND COALESCE(anulled,0)=0
+          AND NOT {open_attendance_sql()}
+        """,
+        {"shift_date": shift_date, "turno": turno},
+    )
+    result["ya_cerrados"] = max(0, len(total_closed) - result["cerrados"])
+    log_event(conn, "info", "configuracion", "safe_shift_close", f"Cierre seguro {shift_date} {turno}: {result}", user_name)
+    return result
+
+
+
 def recalculate_attendance_records(conn: Connection, fecha_inicio: str, fecha_fin: str, turno: str = "", user_name: str = "Sistema") -> dict:
     """Recalcula retardo/salida temprana/extra usando la configuración actual de turnos.
 
@@ -1023,7 +1293,7 @@ def provisional_close_deadline(config: dict, shift_date_iso: str) -> datetime:
 
 def auto_close_overdue_records(conn: Connection, user: str = "Sistema") -> int:
     now_dt = now_mx()
-    open_rows = fetch_all(conn, "SELECT * FROM attendance WHERE exit_at IS NULL ORDER BY id ASC")
+    open_rows = fetch_all(conn, "SELECT * FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '') ORDER BY id ASC")
     closed = 0
     for row in open_rows:
         config = get_shift_config(conn, row.get("turno") or "Día")
@@ -1362,8 +1632,29 @@ def short_datetime(value) -> str:
         return text_value[:16]
 
 
+
+
+def format_minutes_duration(value) -> str:
+    """Visualiza minutos como duración HH:MM.
+    Ejemplos MS: 50 -> 00:50, 70 -> 1:10.
+    La base conserva minutos numéricos para cálculos y nómina.
+    """
+    try:
+        minutes = int(float(value or 0))
+    except Exception:
+        minutes = 0
+    if minutes < 0:
+        minutes = 0
+    hours = minutes // 60
+    mins = minutes % 60
+    if hours == 0:
+        return f"00:{mins:02d}"
+    return f"{hours}:{mins:02d}"
+
+
 # Se asigna aquí también porque short_datetime se define después de los helpers de sesión.
 templates.env.globals["short_datetime"] = short_datetime
+templates.env.globals["fmt_minutes"] = format_minutes_duration
 
 
 def date_filter_clause(alias: str = "a", fecha_inicio: Optional[str] = None, fecha_fin: Optional[str] = None):
@@ -1565,7 +1856,7 @@ def add_summary_sheet(wb: Workbook, conn: Connection, fecha_inicio: Optional[str
     salidas_tempranas = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE exit_status = 'Salida temprana' {clause}"), params).scalar() or 0
     extras = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE exit_status = 'Extra' {clause}"), params).scalar() or 0
     vehiculos = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE vehicle_entered = 1 {clause}"), params).scalar() or 0
-    abiertas = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE exit_at IS NULL {clause}"), params).scalar() or 0
+    abiertas = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE (a.exit_at IS NULL OR TRIM(COALESCE(a.exit_at, '')) = '') {clause}"), params).scalar() or 0
     provisionales = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE provisional_exit = 1 {clause}"), params).scalar() or 0
     pendientes_revision = conn.execute(text(f"SELECT COUNT(*) FROM attendance a WHERE review_required = 1 {clause}"), params).scalar() or 0
 
@@ -2206,14 +2497,14 @@ def monitor(
         late_today = day_stats["retardos"]
         extra_today = day_stats["extras"]
         vehicles_inside = conn.execute(
-            text("SELECT COUNT(*) FROM attendance WHERE exit_at IS NULL AND vehicle_entered = 1 AND COALESCE(anulled,0)=0")
+            text("SELECT COUNT(*) FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '') AND vehicle_entered = 1 AND COALESCE(anulled,0)=0")
         ).scalar() or 0
         inside = fetch_all(conn,
             """
             SELECT a.*, e.nombre, e.area, e.puesto
             FROM attendance a
             JOIN employees e ON e.id = a.employee_id
-            WHERE a.exit_at IS NULL AND COALESCE(a.anulled,0)=0
+            WHERE (a.exit_at IS NULL OR TRIM(COALESCE(a.exit_at, '')) = '') AND COALESCE(a.anulled,0)=0
             ORDER BY a.entry_at DESC
             """
         )
@@ -2267,6 +2558,7 @@ def monitor(
             "end": end,
             "ranking_retardos_dash": ranking_retardos_dash,
             "ranking_puntuales": ranking_puntuales,
+            "today": today,
         }
     )
 
@@ -2280,7 +2572,7 @@ def configuracion_page(request: Request):
     with engine.begin() as conn:
         turnos = fetch_all(conn, "SELECT * FROM shift_settings ORDER BY name")
         empleados_activos = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
-        registros_abiertos = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE exit_at IS NULL")).scalar() or 0
+        registros_abiertos = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '')")).scalar() or 0
         retardos_hoy = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_status IN ('Tarde','Retardo')"), {"today": today}).scalar() or 0
     return templates.TemplateResponse(
         "configuracion.html",
@@ -2291,6 +2583,204 @@ def configuracion_page(request: Request):
             "registros_abiertos": registros_abiertos,
             "retardos_hoy": retardos_hoy,
             "today": today,
+        },
+    )
+
+
+@app.post("/configuracion/cierre-seguro", response_class=HTMLResponse)
+def configuracion_cierre_seguro(
+    request: Request,
+    fecha: str = Form(""),
+    turno: str = Form("Día"),
+    hora_salida: str = Form("19:00"),
+    confirmacion: str = Form(""),
+):
+    admin_user = require_admin_page(request)
+    if not admin_user:
+        return admin_login_redirect(request)
+    today = now_mx().date().isoformat()
+    cierre_result = None
+    cierre_error = ""
+    if as_text(confirmacion).upper() != "CERRAR":
+        cierre_error = "Para aplicar el cierre seguro escribe CERRAR."
+    else:
+        with engine.begin() as conn:
+            cierre_result = close_shift_day_safely(conn, fecha or today, turno, hora_salida, admin_user["username"])
+    with engine.begin() as conn:
+        turnos = fetch_all(conn, "SELECT * FROM shift_settings ORDER BY name")
+        empleados_activos = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
+        registros_abiertos = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '')")).scalar() or 0
+        retardos_hoy = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_status IN ('Tarde','Retardo')"), {"today": today}).scalar() or 0
+    return templates.TemplateResponse(
+        "configuracion.html",
+        {
+            "request": request,
+            "turnos": turnos,
+            "empleados_activos": empleados_activos,
+            "registros_abiertos": registros_abiertos,
+            "retardos_hoy": retardos_hoy,
+            "today": today,
+            "cierre_result": cierre_result,
+            "cierre_error": cierre_error,
+            "cierre_fecha": fecha or today,
+            "cierre_turno": turno,
+            "cierre_hora": hora_salida,
+        },
+    )
+
+
+
+@app.post("/configuracion/estado-planta", response_class=HTMLResponse)
+def configuracion_estado_planta(
+    request: Request,
+    employee_id: str = Form(""),
+    accion: str = Form("dentro"),
+    fecha: str = Form(""),
+    turno: str = Form(""),
+    hora: str = Form(""),
+    confirmacion: str = Form(""),
+):
+    admin_user = require_admin_page(request)
+    if not admin_user:
+        return admin_login_redirect(request)
+
+    today = now_mx().date().isoformat()
+    estado_result = None
+    estado_error = ""
+    employee_id = clean_employee_id(employee_id)
+    accion = as_text(accion).lower()
+    if as_text(confirmacion).upper() != "CONFIRMAR":
+        estado_error = "Para aplicar el ajuste de planta escribe CONFIRMAR."
+    elif not employee_id:
+        estado_error = "ID de empleado obligatorio."
+    else:
+        with engine.begin() as conn:
+            emp = get_employee(conn, employee_id)
+            if not emp:
+                estado_error = "Empleado no encontrado."
+            elif emp.get("estado") != "Activo":
+                estado_error = f"Empleado no activo: {emp.get('estado')}"
+            else:
+                turno_final = as_text(turno) or emp.get("turno") or "Día"
+                fecha_final = fecha or current_shift_date(turno_final, now_mx(), get_shift_config(conn, turno_final))
+                config = get_shift_config(conn, turno_final)
+                start_dt, end_dt = schedule_times_from_config(config, fecha_final)
+                hora_default = start_dt.time() if accion == "dentro" else end_dt.time()
+                mark_time = parse_time_value(hora, hora_default)
+                mark_day = date.fromisoformat(fecha_final) + timedelta(days=1) if (accion == "fuera" and bool(config.get("crosses_midnight")) and mark_time <= start_dt.time()) else date.fromisoformat(fecha_final)
+                mark_dt = datetime.combine(mark_day, mark_time, tzinfo=TZ)
+                ts = now_mx().isoformat()
+
+                if accion == "dentro":
+                    open_att = find_open_attendance(conn, employee_id)
+                    if open_att:
+                        estado_result = {"tipo": "info", "mensaje": f"{emp['nombre']} ya aparece dentro de planta. No se creó otro registro."}
+                    else:
+                        eval_data = evaluate_entry(config, fecha_final, mark_dt)
+                        result = conn.execute(text("""
+                            INSERT INTO attendance (
+                                employee_id, shift_date, turno, entry_at, entry_guard, entry_status, late_reason,
+                                vehicle_expected, vehicle_entered, vehicle_front_entry, vehicle_trunk_entry, incident,
+                                scheduled_entry_at, scheduled_exit_at, entry_limit_at, exit_early_limit_at, extra_limit_at,
+                                entry_tolerance_minutes, exit_tolerance_minutes, extra_after_minutes, late_minutes,
+                                early_minutes, extra_minutes, late_justified, early_justified, extra_authorized, created_at, updated_at
+                            ) VALUES (
+                                :employee_id, :shift_date, :turno, :entry_at, :entry_guard, :entry_status, :late_reason,
+                                :vehicle_expected, :vehicle_entered, '', '', :incident,
+                                :scheduled_entry_at, :scheduled_exit_at, :entry_limit_at, :exit_early_limit_at, :extra_limit_at,
+                                :entry_tolerance_minutes, :exit_tolerance_minutes, :extra_after_minutes, :late_minutes,
+                                0, 0, 0, 0, 0, :created_at, :updated_at
+                            ) RETURNING id
+                        """), {
+                            "employee_id": employee_id,
+                            "shift_date": fecha_final,
+                            "turno": turno_final,
+                            "entry_at": mark_dt.isoformat(),
+                            "entry_guard": f"AJUSTE PLANTA / {admin_user['username']}",
+                            "entry_status": eval_data["status"],
+                            "late_reason": "Ajuste operativo" if eval_data["status"] == "Retardo" else "",
+                            "vehicle_expected": 1 if emp.get("tiene_vehiculo") else 0,
+                            "vehicle_entered": 0,
+                            "incident": "Ajuste operativo: marcado dentro de planta. El siguiente escaneo será salida.",
+                            **eval_data,
+                            "created_at": ts,
+                            "updated_at": ts,
+                        })
+                        rid = str(result.scalar_one())
+                        audit(conn, "attendance", rid, "MARK_INSIDE", admin_user["username"], reason="Ajuste operativo: marcar dentro de planta")
+                        estado_result = {"tipo": "ok", "mensaje": f"{emp['nombre']} quedó marcado dentro. El siguiente escaneo será SALIDA.", "registro": rid}
+
+                elif accion == "fuera":
+                    open_att = find_open_attendance(conn, employee_id)
+                    if not open_att:
+                        estado_error = f"{emp['nombre']} no tiene entrada abierta. No se registró salida."
+                    else:
+                        eval_data = evaluate_exit(config, open_att.get("shift_date") or fecha_final, mark_dt)
+                        status = eval_data["status"]
+                        lunch_value = "SI"
+                        worked_minutes, lunch_value, payroll_note = compute_worked_minutes(open_att.get("entry_at"), mark_dt.isoformat(), eval_data.get("scheduled_entry_at"), eval_data.get("scheduled_exit_at"), lunch_value, status)
+                        incident = as_text(open_att.get("incident"))
+                        note = "Ajuste operativo: marcado fuera de planta."
+                        new_incident = (incident + " | " + note).strip(" |") if incident else note
+                        conn.execute(text("""
+                            UPDATE attendance
+                            SET exit_at=:exit_at,
+                                exit_guard=:exit_guard,
+                                exit_status=:exit_status,
+                                early_reason=:early_reason,
+                                scheduled_entry_at=COALESCE(NULLIF(scheduled_entry_at, ''), :scheduled_entry_at),
+                                scheduled_exit_at=COALESCE(NULLIF(scheduled_exit_at, ''), :scheduled_exit_at),
+                                entry_limit_at=COALESCE(NULLIF(entry_limit_at, ''), :entry_limit_at),
+                                exit_early_limit_at=:exit_early_limit_at,
+                                extra_limit_at=:extra_limit_at,
+                                entry_tolerance_minutes=:entry_tolerance_minutes,
+                                exit_tolerance_minutes=:exit_tolerance_minutes,
+                                extra_after_minutes=:extra_after_minutes,
+                                early_minutes=:early_minutes,
+                                extra_minutes=:extra_minutes,
+                                lunch_taken=:lunch_taken,
+                                worked_minutes=:worked_minutes,
+                                incident=:incident,
+                                updated_at=:updated_at
+                            WHERE id=:id
+                        """), {
+                            "id": open_att["id"],
+                            "exit_at": mark_dt.isoformat(),
+                            "exit_guard": f"AJUSTE PLANTA / {admin_user['username']}",
+                            "exit_status": status,
+                            "early_reason": "",
+                            "lunch_taken": lunch_value,
+                            "worked_minutes": worked_minutes,
+                            "incident": new_incident,
+                            "updated_at": ts,
+                            **eval_data,
+                        })
+                        audit(conn, "attendance", str(open_att["id"]), "MARK_OUTSIDE", admin_user["username"], reason="Ajuste operativo: marcar fuera de planta")
+                        estado_result = {"tipo": "ok", "mensaje": f"{emp['nombre']} quedó marcado fuera de planta.", "registro": open_att["id"]}
+                else:
+                    estado_error = "Acción inválida. Usa dentro o fuera."
+
+    with engine.begin() as conn:
+        turnos = fetch_all(conn, "SELECT * FROM shift_settings ORDER BY name")
+        empleados_activos = conn.execute(text("SELECT COUNT(*) FROM employees WHERE estado = 'Activo'")).scalar() or 0
+        registros_abiertos = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '')")).scalar() or 0
+        retardos_hoy = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE shift_date = :today AND entry_status IN ('Tarde','Retardo')"), {"today": today}).scalar() or 0
+    return templates.TemplateResponse(
+        "configuracion.html",
+        {
+            "request": request,
+            "turnos": turnos,
+            "empleados_activos": empleados_activos,
+            "registros_abiertos": registros_abiertos,
+            "retardos_hoy": retardos_hoy,
+            "today": today,
+            "estado_result": estado_result,
+            "estado_error": estado_error,
+            "estado_employee_id": employee_id,
+            "estado_accion": accion,
+            "estado_fecha": fecha or today,
+            "estado_turno": turno,
+            "estado_hora": hora,
         },
     )
 
@@ -2632,7 +3122,7 @@ def sistema_page(request: Request):
         except Exception as exc:
             db_ok = False
             db_error = str(exc)
-        total_open = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE exit_at IS NULL")).scalar() or 0
+        total_open = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE (exit_at IS NULL OR TRIM(COALESCE(exit_at, '')) = '')")).scalar() or 0
         pending_review = conn.execute(text("SELECT COUNT(*) FROM attendance WHERE review_required = 1")).scalar() or 0
         last_attendance = fetch_one(conn, "SELECT * FROM attendance ORDER BY updated_at DESC LIMIT 1")
         recent_events = fetch_all(conn, "SELECT * FROM system_events ORDER BY created_at DESC LIMIT 80")
@@ -2813,7 +3303,7 @@ def employee_period_rows(conn: Connection, start: date, end: date, area: str = "
                SUM(COALESCE(a.extra_minutes,0)) AS min_extra,
                SUM(CASE WHEN a.provisional_exit = 1 THEN 1 ELSE 0 END) AS salidas_provisionales,
                SUM(CASE WHEN a.review_required = 1 THEN 1 ELSE 0 END) AS pendientes_revision,
-               SUM(CASE WHEN a.exit_at IS NULL THEN 1 ELSE 0 END) AS abiertas,
+               SUM(CASE WHEN (a.exit_at IS NULL OR TRIM(COALESCE(a.exit_at, '')) = '') THEN 1 ELSE 0 END) AS abiertas,
                SUM(CASE WHEN a.anulled = 1 THEN 1 ELSE 0 END) AS anulados
         FROM employees e
         LEFT JOIN attendance a ON a.employee_id=e.id AND {where_att}
@@ -4316,11 +4806,7 @@ def api_scan(request: Request, raw_code: str):
         emp = get_employee(conn, employee_id)
         if not emp:
             return JSONResponse(status_code=404, content={"ok": False, "message": "Código no encontrado como empleado ni vigilante"})
-        open_att = fetch_one(
-            conn,
-            "SELECT * FROM attendance WHERE employee_id = :employee_id AND exit_at IS NULL ORDER BY id DESC LIMIT 1",
-            {"employee_id": employee_id}
-        )
+        open_att = find_open_attendance(conn, employee_id)
         config = get_shift_config(conn, emp.get("turno") or "Día")
         if open_att:
             entry_dt_open = parse_dt(open_att.get("entry_at") or "")
@@ -4332,9 +4818,16 @@ def api_scan(request: Request, raw_code: str):
             preview["movement"] = "salida"
         else:
             shift_date = current_shift_date(emp.get("turno") or "Día", dt, config)
+            latest_shift_att = find_latest_shift_attendance(conn, employee_id, shift_date, emp.get("turno") or "Día")
             preview = evaluate_entry(config, shift_date, dt)
+            if latest_shift_att and not is_open_attendance_row(latest_shift_att):
+                preview["status"] = "Reentrada"
+                preview["late_minutes"] = 0
             preview["movement"] = "entrada"
             preview["shift_date"] = shift_date
+            confirmation = build_entry_confirmation(config, shift_date, dt, latest_shift_att)
+            if confirmation:
+                preview.update(confirmation)
     return {
         "ok": True,
         "type": "employee",
@@ -4364,11 +4857,7 @@ def api_empleado(request: Request, employee_id: str):
         emp = get_employee(conn, employee_id)
         if not emp:
             return JSONResponse(status_code=404, content={"ok": False, "message": "Empleado no encontrado"})
-        open_att = fetch_one(
-            conn,
-            "SELECT * FROM attendance WHERE employee_id = :employee_id AND exit_at IS NULL ORDER BY id DESC LIMIT 1",
-            {"employee_id": employee_id}
-        )
+        open_att = find_open_attendance(conn, employee_id)
         config = get_shift_config(conn, emp.get("turno") or "Día")
         if open_att:
             entry_dt_open = parse_dt(open_att.get("entry_at") or "")
@@ -4380,9 +4869,16 @@ def api_empleado(request: Request, employee_id: str):
             preview["movement"] = "salida"
         else:
             shift_date = current_shift_date(emp.get("turno") or "Día", dt, config)
+            latest_shift_att = find_latest_shift_attendance(conn, employee_id, shift_date, emp.get("turno") or "Día")
             preview = evaluate_entry(config, shift_date, dt)
+            if latest_shift_att and not is_open_attendance_row(latest_shift_att):
+                preview["status"] = "Reentrada"
+                preview["late_minutes"] = 0
             preview["movement"] = "entrada"
             preview["shift_date"] = shift_date
+            confirmation = build_entry_confirmation(config, shift_date, dt, latest_shift_att)
+            if confirmation:
+                preview.update(confirmation)
     return {
         "ok": True,
         "employee": emp,
@@ -4406,6 +4902,7 @@ async def api_registro(
     motivo_retardo: str = Form(""),
     motivo_salida_temprana: str = Form(""),
     comida_tomada: str = Form(""),
+    confirmacion_operativa: str = Form(""),
     observaciones: str = Form(""),
     foto_frontal: Optional[UploadFile] = File(None),
     foto_cajuela: Optional[UploadFile] = File(None),
@@ -4436,12 +4933,15 @@ async def api_registro(
 
         # El sistema decide el movimiento. Si hay entrada abierta, toca salida.
         # Si no hay entrada abierta, toca entrada. El formulario no manda aquí.
-        open_att = fetch_one(
-            conn,
-            "SELECT * FROM attendance WHERE employee_id = :employee_id AND exit_at IS NULL ORDER BY id DESC LIMIT 1",
-            {"employee_id": employee_id}
-        )
+        open_att = find_open_attendance(conn, employee_id)
         movimiento = "salida" if open_att else "entrada"
+        if movimiento == "entrada":
+            config_for_block = get_shift_config(conn, emp.get("turno") or "Día")
+            shift_date_for_block = current_shift_date(emp.get("turno") or "Día", dt, config_for_block)
+            latest_shift_att = find_latest_shift_attendance(conn, employee_id, shift_date_for_block, emp.get("turno") or "Día")
+            confirmation = build_entry_confirmation(config_for_block, shift_date_for_block, dt, latest_shift_att)
+            if confirmation and as_text(confirmacion_operativa).upper() != "CONFIRMAR":
+                return entry_confirmation_required_response(config_for_block, shift_date_for_block, dt, latest_shift_att)
 
         # Versión Render Free: no se capturan ni almacenan imágenes.
         front_path = ""
@@ -4451,6 +4951,9 @@ async def api_registro(
             config = get_shift_config(conn, emp["turno"])
             shift_date = current_shift_date(emp["turno"], dt, config)
             eval_data = evaluate_entry(config, shift_date, dt)
+            if 'latest_shift_att' in locals() and latest_shift_att and not is_open_attendance_row(latest_shift_att):
+                eval_data["status"] = "Reentrada"
+                eval_data["late_minutes"] = 0
             status = eval_data["status"]
             if status == "Retardo" and not motivo_retardo.strip():
                 return JSONResponse(status_code=400, content={"ok": False, "message": "Retardo detectado: el motivo es obligatorio"})
@@ -4500,11 +5003,7 @@ async def api_registro(
             return {"ok": True, "message": msg, "record_id": record_id, "status": status, "evaluation": eval_data}
 
         if movimiento == "salida":
-            open_att = fetch_one(
-                conn,
-                "SELECT * FROM attendance WHERE employee_id = :employee_id AND exit_at IS NULL ORDER BY id DESC LIMIT 1",
-                {"employee_id": employee_id}
-            )
+            open_att = find_open_attendance(conn, employee_id)
             if not open_att:
                 return JSONResponse(status_code=400, content={"ok": False, "message": "No hay entrada abierta para registrar salida"})
 
@@ -4576,6 +5075,107 @@ async def api_registro(
             return {"ok": True, "message": msg, "record_id": open_att["id"], "status": status, "evaluation": eval_data, "worked_minutes": worked_minutes, "lunch_taken": lunch_value}
 
     return JSONResponse(status_code=400, content={"ok": False, "message": "Movimiento inválido"})
+
+
+
+@app.post("/manual/entrada", response_class=HTMLResponse)
+def manual_entrada(
+    request: Request,
+    employee_id: str = Form(...),
+    fecha: str = Form(""),
+    hora_entrada: str = Form("08:00"),
+    motivo: str = Form(""),
+    vehiculo: str = Form("0"),
+):
+    admin_user = require_admin_http(request)
+    employee_id = clean_employee_id(employee_id)
+    today = now_mx().date()
+    shift_day = safe_date(fecha, today)
+    motivo = as_text(motivo).strip()
+    if not employee_id:
+        raise HTTPException(status_code=400, detail="ID de empleado inválido")
+    if not motivo:
+        raise HTTPException(status_code=400, detail="El motivo de entrada manual es obligatorio")
+    entrada_t = parse_time_value(hora_entrada, time(8, 0))
+    entry_dt = datetime.combine(shift_day, entrada_t, tzinfo=TZ)
+    ts = now_mx().isoformat()
+
+    with engine.begin() as conn:
+        emp = get_employee(conn, employee_id)
+        if not emp:
+            raise HTTPException(status_code=404, detail="Empleado no encontrado")
+        if emp.get("estado") != "Activo":
+            raise HTTPException(status_code=400, detail=f"Empleado no activo: {emp.get('estado')}")
+
+        open_att = find_open_attendance(conn, employee_id) if "find_open_attendance" in globals() else fetch_one(
+            conn,
+            "SELECT * FROM attendance WHERE employee_id=:employee_id AND (exit_at IS NULL OR TRIM(COALESCE(exit_at,''))='') AND COALESCE(anulled,0)=0 ORDER BY id DESC LIMIT 1",
+            {"employee_id": employee_id},
+        )
+        if open_att:
+            raise HTTPException(status_code=409, detail="Este empleado ya tiene una entrada abierta. No se creó otra entrada manual.")
+
+        config = get_shift_config(conn, emp.get("turno") or "Día")
+        shift_date = current_shift_date(emp.get("turno") or "Día", entry_dt, config)
+        existing_same_day = fetch_one(
+            conn,
+            """
+            SELECT * FROM attendance
+            WHERE employee_id=:employee_id
+              AND shift_date=:shift_date
+              AND turno=:turno
+              AND COALESCE(anulled,0)=0
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            {"employee_id": employee_id, "shift_date": shift_date, "turno": emp.get("turno") or "Día"},
+        )
+        if existing_same_day:
+            raise HTTPException(status_code=409, detail="Este empleado ya tiene registro para ese turno/día. Usa reentrada o correcciones para evitar duplicados.")
+
+        eval_data = evaluate_entry(config, shift_date, entry_dt)
+        incident = f"ENTRADA MANUAL ADMIN: {motivo}"
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO attendance (
+                    employee_id, shift_date, turno, entry_at, entry_guard, entry_status, late_reason,
+                    vehicle_expected, vehicle_entered, vehicle_front_entry, vehicle_trunk_entry, incident,
+                    scheduled_entry_at, scheduled_exit_at, entry_limit_at, exit_early_limit_at, extra_limit_at,
+                    entry_tolerance_minutes, exit_tolerance_minutes, extra_after_minutes, late_minutes,
+                    early_minutes, extra_minutes, late_justified, early_justified, extra_authorized,
+                    review_required, review_status, created_at, updated_at
+                ) VALUES (
+                    :employee_id, :shift_date, :turno, :entry_at, :entry_guard, :entry_status, :late_reason,
+                    :vehicle_expected, :vehicle_entered, '', '', :incident,
+                    :scheduled_entry_at, :scheduled_exit_at, :entry_limit_at, :exit_early_limit_at, :extra_limit_at,
+                    :entry_tolerance_minutes, :exit_tolerance_minutes, :extra_after_minutes, :late_minutes,
+                    0, 0, 0, 0, 0,
+                    1, 'Entrada manual activa en planta', :created_at, :updated_at
+                ) RETURNING id
+                """
+            ),
+            {
+                "employee_id": employee_id,
+                "shift_date": shift_date,
+                "turno": emp.get("turno") or "Día",
+                "entry_at": entry_dt.isoformat(),
+                "entry_guard": f"MANUAL / {admin_user['username']}",
+                "entry_status": eval_data["status"],
+                "late_reason": motivo if eval_data["status"] == "Retardo" else "",
+                "vehicle_expected": 1 if emp.get("tiene_vehiculo") else 0,
+                "vehicle_entered": 1 if vehiculo == "1" else 0,
+                "incident": incident,
+                **eval_data,
+                "created_at": ts,
+                "updated_at": ts,
+            },
+        )
+        record_id = str(result.scalar_one())
+        audit(conn, "attendance", record_id, "MANUAL_ENTRY", admin_user["username"], reason=incident)
+        log_event(conn, "info", "manual", "manual_entry", f"Entrada manual {employee_id} {entry_dt.isoformat()}", admin_user["username"])
+
+    return RedirectResponse(url="/monitor?manual=entrada_ok", status_code=303)
 
 
 @app.get("/healthz")

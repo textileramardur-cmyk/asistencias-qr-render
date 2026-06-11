@@ -12,7 +12,7 @@
 </section>
 
 <div class="kpi-grid">
-  <div class="kpi"><small>Retardos</small><strong>{{ kpis.retardos }}</strong><small>{{ kpis.min_retardo }} min acumulados</small></div>
+  <div class="kpi"><small>Retardos</small><strong>{{ kpis.retardos }}</strong><small>{{ fmt_minutes(kpis.min_retardo) }} acumulados</small></div>
   <div class="kpi"><small>Incompletos</small><strong>{{ kpis.sin_motivo }}</strong><small>Sin motivo capturado</small></div>
   <div class="kpi"><small>Salidas tempranas</small><strong>{{ kpis.salidas_tempranas }}</strong><small>{{ kpis.min_temprano }} min</small></div>
   <div class="kpi"><small>Extras</small><strong>{{ kpis.extras }}</strong><small>{{ kpis.min_extra }} min</small></div>
@@ -31,7 +31,7 @@
           <td>{{ r.turno }}</td>
           <td>{{ short_datetime(r.entry_at) }}</td>
           <td>{{ short_datetime(r.entry_limit_at) }}</td>
-          <td>{{ r.late_minutes or 0 }}</td>
+          <td>{{ fmt_minutes(r.late_minutes) }}</td>
           <td>{{ r.late_reason or 'SIN MOTIVO' }}</td>
           <td>
             {% if r.late_reason %}<span class="badge ok">Completo</span>{% else %}<span class="badge bad">Incompleto</span>{% endif %}

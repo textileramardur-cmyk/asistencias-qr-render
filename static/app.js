@@ -8,6 +8,14 @@ function byId(id) { return document.getElementById(id); }
 function show(el) { if (el) el.classList.remove('hidden'); }
 function hide(el) { if (el) el.classList.add('hidden'); }
 function pad(n) { return String(n).padStart(2, '0'); }
+function fmtMinutesDuration(value) {
+  const n = Math.max(0, Math.round(Number(value || 0)));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h === 0) return `00:${String(m).padStart(2, '0')}`;
+  return `${h}:${String(m).padStart(2, '0')}`;
+}
+
 function fmtDateTime(value) {
   if (!value) return '-';
   const d = new Date(value);
@@ -58,6 +66,9 @@ function paintEvaluation(preview) {
   if (!box || !preview) return;
   box.className = 'status-box';
   let detail = '';
+  if (preview.requires_confirmation) {
+    box.classList.add('warn');
+  }
   if (preview.status === 'Retardo') {
     box.classList.add('warn');
     detail = `Límite ${fmtDateTime(preview.entry_limit_at)} · ${preview.late_minutes || 0} min tarde · motivo obligatorio.`;
@@ -70,8 +81,8 @@ function paintEvaluation(preview) {
   } else {
     detail = `Horario OK · entrada límite ${fmtDateTime(preview.entry_limit_at)} · extra después de ${fmtDateTime(preview.extra_limit_at)}.`;
   }
-  statusEl.innerText = preview.status || '-';
-  detailEl.innerText = detail;
+  statusEl.innerText = preview.requires_confirmation ? `${preview.status || '-'} · requiere confirmación` : (preview.status || '-');
+  detailEl.innerText = preview.requires_confirmation ? `${preview.message || 'Movimiento sensible: confirma antes de guardar.'} ${detail}` : detail;
   syncPanelsByPreview();
 }
 
@@ -168,6 +179,14 @@ async function submitAttendance(event) {
   if (currentPreview?.status === 'Salida temprana' && !byId('lunchTaken').value) {
     alert('Salida temprana: indica si tomó su hora de comida.');
     return;
+  }
+
+  const confirmInput = byId('formConfirmacionOperativa');
+  if (confirmInput) confirmInput.value = '';
+  if (currentPreview?.requires_confirmation) {
+    const ok = window.confirm((currentPreview.message || 'Este movimiento requiere doble confirmación.') + '\n\nConfirma solo si el trabajador realmente está entrando o reingresando.');
+    if (!ok) return;
+    if (confirmInput) confirmInput.value = 'CONFIRMAR';
   }
 
   const resultBox = byId('resultBox');
