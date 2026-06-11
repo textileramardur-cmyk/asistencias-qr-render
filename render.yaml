@@ -1,7 +1,31 @@
-__pycache__/
-*.pyc
-.env
-/data/
-/uploads/
-*.db
-.DS_Store
+services:
+  - type: web
+    name: asistencias-qr-render
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: asistencias-qr-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: DATA_DIR
+        value: /tmp/asistencias_data
+      - key: SESSION_DAYS
+        value: "14"
+      - key: SESSION_COOKIE_SECURE
+        value: "1"
+      - key: LOGIN_MAX_ATTEMPTS
+        value: "6"
+      - key: LOGIN_LOCK_MINUTES
+        value: "15"
+
+databases:
+  - name: asistencias-qr-db
+    databaseName: asistencias_qr
+    user: asistencias_qr_user
+    plan: free
