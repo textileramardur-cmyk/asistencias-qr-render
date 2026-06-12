@@ -7,6 +7,8 @@ let qrBusy = false;
 let noQrMode = false;
 let noQrReasonText = '';
 let feedbackTimer = null;
+let cameraDevices = [];
+let currentCameraIndex = -1;
 
 function byId(id) { return document.getElementById(id); }
 function show(el) { if (el) el.classList.remove('hidden'); }
@@ -374,34 +376,97 @@ async function submitAttendance(event) {
   }
 }
 
-async function toggleScanner() {
+function cameraLabel(device) {
+  return String(device?.label || 'Cámara').trim() || 'Cámara';
+}
+
+function cameraScore(device) {
+  const label = cameraLabel(device).toLowerCase();
+  let score = 0;
+  if (/(front|frontal|user|selfie)/.test(label)) score -= 120;
+  if (/(back|rear|environment|trasera|posterior|atrás|atras)/.test(label)) score += 80;
+  if (/(wide|gran angular|angular)/.test(label)) score += 35;
+  if (/(ultra)/.test(label)) score += 15;
+  if (/(tele|telephoto|zoom|macro|depth|desk|continuity)/.test(label)) score -= 70;
+  return score;
+}
+
+async function getSortedCameras() {
+  if (!window.Html5Qrcode || !Html5Qrcode.getCameras) return [];
+  try {
+    const list = await Html5Qrcode.getCameras();
+    if (!Array.isArray(list) || !list.length) return [];
+    cameraDevices = list.slice().sort((a, b) => cameraScore(b) - cameraScore(a));
+    return cameraDevices;
+  } catch (_) {
+    return cameraDevices || [];
+  }
+}
+
+async function prepareCameraVideo(readerId) {
+  let video = null;
+  for (let i = 0; i < 25; i++) {
+    video = document.querySelector(`#${readerId} video`);
+    if (video) break;
+    await new Promise(resolve => setTimeout(resolve, 80));
+  }
+  if (!video) return false;
+
+  // Safari/iPhone puede dar pantalla negra si el video no está en modo inline/autoplay.
+  video.setAttribute('playsinline', 'true');
+  video.setAttribute('webkit-playsinline', 'true');
+  video.setAttribute('autoplay', 'true');
+  video.setAttribute('muted', 'true');
+  video.muted = true;
+  video.controls = false;
+
+  video.style.display = 'block';
+  video.style.visibility = 'visible';
+  video.style.opacity = '1';
+  video.style.width = '100%';
+  video.style.height = '100%';
+  video.style.objectFit = 'cover';
+  video.style.objectPosition = 'center center';
+  video.style.transform = 'none';
+  video.style.filter = 'none';
+  video.style.background = '#000';
+
+  try { await video.play(); } catch (_) {}
+
+  // Darle tiempo al navegador a pintar el primer frame.
+  for (let i = 0; i < 12; i++) {
+    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) return true;
+    await new Promise(resolve => setTimeout(resolve, 120));
+    try { await video.play(); } catch (_) {}
+  }
+  return video.videoWidth > 0;
+}
+
+async function stopScannerInstance() {
+  const cameraZone = byId('guardCameraZone');
+  const btnText = byId('cameraButtonText');
+  if (!scanner) {
+    scannerRunning = false;
+    cameraZone?.classList.remove('camera-active');
+    if (btnText) btnText.innerText = 'Activar cámara';
+    return;
+  }
+  try {
+    if (scannerRunning) await scanner.stop();
+  } catch (_) {}
+  try { await scanner.clear(); } catch (_) {}
+  scanner = null;
+  scannerRunning = false;
+  cameraZone?.classList.remove('camera-active');
+  if (btnText) btnText.innerText = 'Activar cámara';
+}
+
+async function startScanner(preferNext = false) {
   const readerId = 'reader';
   const status = byId('scannerStatus');
   const btnText = byId('cameraButtonText');
   const cameraZone = byId('guardCameraZone');
-
   const setStatus = (msg) => { if (status) status.innerText = msg; };
-  const markCameraOff = () => {
-    scannerRunning = false;
-    cameraZone?.classList.remove('camera-active');
-    if (btnText) btnText.innerText = 'Activar cámara';
-  };
-
-  async function stopScannerInstance() {
-    if (!scanner) return;
-    try {
-      if (scannerRunning) await scanner.stop();
-    } catch (_) {}
-    try { await scanner.clear(); } catch (_) {}
-    scanner = null;
-    markCameraOff();
-  }
-
-  if (scannerRunning && scanner) {
-    await stopScannerInstance();
-    setStatus('Cámara detenida. Puedes capturar ID manual.');
-    return;
-  }
 
   if (!window.Html5Qrcode) {
     showFeedback('error', 'CÁMARA NO DISPONIBLE', 'El lector QR no cargó. Usa captura manual del ID.');
@@ -430,111 +495,70 @@ async function toggleScanner() {
     await stopScannerInstance();
   };
 
-  const qrboxForViewfinder = (viewfinderWidth, viewfinderHeight) => {
-    const minEdge = Math.min(viewfinderWidth || 300, viewfinderHeight || 300);
-    const size = Math.max(210, Math.min(300, Math.floor(minEdge * 0.55)));
-    return { width: size, height: size };
-  };
-
   const baseOptions = [
-    { fps: 10, qrbox: qrboxForViewfinder, disableFlip: true },
-    { fps: 8, qrbox: qrboxForViewfinder, disableFlip: true },
+    { fps: 10, qrbox: { width: 260, height: 260 }, disableFlip: true },
+    { fps: 8, qrbox: { width: 230, height: 230 }, disableFlip: true },
     { fps: 6, disableFlip: true }
   ];
 
-  async function normalizeCameraView() {
-    // Algunos celulares, especialmente iPhone, abren lente con zoom o telefoto.
-    // Forzamos zoom mínimo si el navegador lo permite, sin romper compatibilidad.
-    await new Promise(resolve => setTimeout(resolve, 180));
-    const video = document.querySelector(`#${readerId} video`);
-    if (video) {
-      video.style.objectFit = 'contain';
-      video.style.objectPosition = 'center center';
-      video.style.transform = 'none';
-      video.style.filter = 'none';
-    }
-    try {
-      const stream = video?.srcObject;
-      const track = stream?.getVideoTracks?.()[0];
-      if (!track || !track.getCapabilities || !track.applyConstraints) return;
-      const caps = track.getCapabilities();
-      const advanced = [];
-      if (caps.zoom) {
-        const minZoom = Number.isFinite(caps.zoom.min) ? caps.zoom.min : 1;
-        advanced.push({ zoom: minZoom });
-      }
-      if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
-        advanced.push({ focusMode: 'continuous' });
-      }
-      if (advanced.length) {
-        await track.applyConstraints({ advanced }).catch(() => {});
-      }
-    } catch (_) {}
-  }
-
   async function startWith(cameraConfig, label) {
+    let lastErr = null;
     for (const options of baseOptions) {
       await stopScannerInstance();
-      scanner = new Html5Qrcode(readerId, { verbose: false });
-      await scanner.start(cameraConfig, options, onDecoded);
-      scannerRunning = true;
-      cameraZone?.classList.add('camera-active');
-      await normalizeCameraView();
-      if (btnText) btnText.innerText = 'Detener cámara';
-      setStatus(`Cámara activa${label ? ' · ' + label : ''}. Mantén el QR al centro sin pegarlo demasiado.`);
-      return true;
+      try {
+        scanner = new Html5Qrcode(readerId, { verbose: false });
+        await scanner.start(cameraConfig, options, onDecoded);
+        scannerRunning = true;
+        cameraZone?.classList.add('camera-active');
+        if (btnText) btnText.innerText = 'Detener cámara';
+        const painted = await prepareCameraVideo(readerId);
+        setStatus(`Cámara activa${label ? ' · ' + label : ''}. ${painted ? 'Mantén el QR al centro.' : 'Si ves negro, toca Cambiar cámara.'}`);
+        return true;
+      } catch (err) {
+        lastErr = err;
+      }
     }
-    return false;
+    throw lastErr;
   }
 
   try {
     setStatus('Solicitando permiso de cámara...');
 
-    // Primero usamos constraints simples. Esto evita que iPhone tome telefoto o
-    // aplique recorte 16:9 que se siente como zoom.
-    const constraintFallbacks = [
-      { facingMode: { ideal: 'environment' } },
-      { facingMode: 'environment' }
-    ];
+    const cameras = await getSortedCameras();
+    if (cameras.length) {
+      if (currentCameraIndex < 0) currentCameraIndex = 0;
+      if (preferNext) currentCameraIndex = (currentCameraIndex + 1) % cameras.length;
 
+      let lastError = null;
+      for (let attempt = 0; attempt < cameras.length; attempt++) {
+        const idx = (currentCameraIndex + attempt) % cameras.length;
+        const device = cameras[idx];
+        try {
+          currentCameraIndex = idx;
+          await startWith(device.id, cameraLabel(device));
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      throw lastError;
+    }
+
+    // Fallback compatible si el navegador no entrega lista de cámaras.
+    const fallbacks = [
+      { facingMode: { ideal: 'environment' } },
+      { facingMode: 'environment' },
+      true,
+      { facingMode: { ideal: 'user' } }
+    ];
     let lastError = null;
-    for (const cfg of constraintFallbacks) {
+    for (const cfg of fallbacks) {
       try {
-        await startWith(cfg, 'vista amplia');
+        await startWith(cfg, 'modo compatible');
         return;
       } catch (err) {
         lastError = err;
       }
-    }
-
-    // Si el navegador no acepta constraints, usamos lista de cámaras.
-    // Ojo: no elegimos la última cámara porque en algunos iPhone es telefoto.
-    let cameras = [];
-    try {
-      cameras = await Html5Qrcode.getCameras();
-    } catch (err) {
-      cameras = [];
-    }
-
-    if (cameras && cameras.length) {
-      const badWords = ['tele', 'telephoto', 'zoom', 'macro', 'desk'];
-      const backWords = ['back', 'rear', 'environment', 'trasera', 'posterior', 'atrás', 'atras'];
-      const wideWords = ['wide', 'ultra', 'gran angular', 'angular'];
-      const labelOf = c => (c.label || '').toLowerCase();
-      const rear = cameras.filter(c => backWords.some(w => labelOf(c).includes(w)));
-      const pool = rear.length ? rear : cameras;
-      const notTele = pool.filter(c => !badWords.some(w => labelOf(c).includes(w)));
-      const wide = notTele.find(c => wideWords.some(w => labelOf(c).includes(w)));
-      const selected = wide || notTele[0] || pool[0] || cameras[0];
-      await startWith(selected.id, selected.label || 'cámara amplia');
-      return;
-    }
-
-    try {
-      await startWith(true, 'modo básico');
-      return;
-    } catch (err) {
-      lastError = err;
     }
     throw lastError;
   } catch (err) {
@@ -554,6 +578,23 @@ async function toggleScanner() {
     setStatus(message);
     showFeedback('error', 'SIN CÁMARA', message);
   }
+}
+
+async function toggleScanner() {
+  const status = byId('scannerStatus');
+  const setStatus = (msg) => { if (status) status.innerText = msg; };
+  if (scannerRunning && scanner) {
+    await stopScannerInstance();
+    setStatus('Cámara detenida. Puedes capturar ID manual.');
+    return;
+  }
+  await startScanner(false);
+}
+
+async function cycleCamera() {
+  const status = byId('scannerStatus');
+  if (status) status.innerText = 'Cambiando cámara...';
+  await startScanner(true);
 }
 
 async function loadLastMovements() {

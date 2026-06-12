@@ -1,0 +1,2 @@
+Versión completa con UX vigilancia + corrección de pantalla negra en cámara.
+Subir a GitHub manteniendo la raíz con main.py, templates/ y static/.

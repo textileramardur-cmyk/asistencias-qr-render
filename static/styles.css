@@ -1766,3 +1766,44 @@ th { color: var(--azul); background: #f8fafc; }
     height: min(64vw, 290px) !important;
   }
 }
+
+
+/* =========================================================
+   FIX cámara negra: preview real, Safari inline, botón cambiar cámara.
+   ========================================================= */
+.guard-actions-v2 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.guard-camera-zone.camera-active .guard-camera-shade {
+  background: transparent !important;
+}
+.guard-camera-zone.camera-active .guard-reader,
+.guard-camera-zone.camera-active .guard-reader > div,
+.guard-camera-zone.camera-active #reader,
+.guard-camera-zone.camera-active #reader > div,
+.guard-camera-zone.camera-active #reader video,
+.guard-camera-zone.camera-active .guard-reader video {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.guard-camera-zone.camera-active #reader video,
+.guard-camera-zone.camera-active .guard-reader video {
+  display: block !important;
+  object-fit: cover !important;
+  object-position: center center !important;
+  background: #000 !important;
+}
+.guard-camera-zone.camera-active .guard-frame-v2 {
+  width: min(58vw, 280px) !important;
+  height: min(58vw, 280px) !important;
+}
+@media (max-width: 720px) {
+  .guard-actions-v2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 420px) {
+  .guard-actions-v2 {
+    grid-template-columns: 1fr;
+  }
+}
