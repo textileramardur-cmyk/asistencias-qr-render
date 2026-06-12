@@ -1,0 +1,2 @@
+Versión completa con UX vigilancia + cámara compatible + cámara sin zoom.
+Subir a GitHub manteniendo la raíz con main.py, templates/ y static/.

@@ -430,11 +430,47 @@ async function toggleScanner() {
     await stopScannerInstance();
   };
 
+  const qrboxForViewfinder = (viewfinderWidth, viewfinderHeight) => {
+    const minEdge = Math.min(viewfinderWidth || 300, viewfinderHeight || 300);
+    const size = Math.max(210, Math.min(300, Math.floor(minEdge * 0.55)));
+    return { width: size, height: size };
+  };
+
   const baseOptions = [
-    { fps: 10, qrbox: { width: 320, height: 320 }, disableFlip: true },
-    { fps: 8, qrbox: { width: 280, height: 280 }, disableFlip: true },
+    { fps: 10, qrbox: qrboxForViewfinder, disableFlip: true },
+    { fps: 8, qrbox: qrboxForViewfinder, disableFlip: true },
     { fps: 6, disableFlip: true }
   ];
+
+  async function normalizeCameraView() {
+    // Algunos celulares, especialmente iPhone, abren lente con zoom o telefoto.
+    // Forzamos zoom mínimo si el navegador lo permite, sin romper compatibilidad.
+    await new Promise(resolve => setTimeout(resolve, 180));
+    const video = document.querySelector(`#${readerId} video`);
+    if (video) {
+      video.style.objectFit = 'contain';
+      video.style.objectPosition = 'center center';
+      video.style.transform = 'none';
+      video.style.filter = 'none';
+    }
+    try {
+      const stream = video?.srcObject;
+      const track = stream?.getVideoTracks?.()[0];
+      if (!track || !track.getCapabilities || !track.applyConstraints) return;
+      const caps = track.getCapabilities();
+      const advanced = [];
+      if (caps.zoom) {
+        const minZoom = Number.isFinite(caps.zoom.min) ? caps.zoom.min : 1;
+        advanced.push({ zoom: minZoom });
+      }
+      if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+        advanced.push({ focusMode: 'continuous' });
+      }
+      if (advanced.length) {
+        await track.applyConstraints({ advanced }).catch(() => {});
+      }
+    } catch (_) {}
+  }
 
   async function startWith(cameraConfig, label) {
     for (const options of baseOptions) {
@@ -443,8 +479,9 @@ async function toggleScanner() {
       await scanner.start(cameraConfig, options, onDecoded);
       scannerRunning = true;
       cameraZone?.classList.add('camera-active');
+      await normalizeCameraView();
       if (btnText) btnText.innerText = 'Detener cámara';
-      setStatus(`Cámara activa${label ? ' · ' + label : ''}. Acerca el QR al centro.`);
+      setStatus(`Cámara activa${label ? ' · ' + label : ''}. Mantén el QR al centro sin pegarlo demasiado.`);
       return true;
     }
     return false;
@@ -453,39 +490,51 @@ async function toggleScanner() {
   try {
     setStatus('Solicitando permiso de cámara...');
 
-    // Primero intentamos con lista de cámaras. Es más compatible que exigir resolución HD.
-    let cameras = [];
-    try {
-      cameras = await Html5Qrcode.getCameras();
-    } catch (err) {
-      // Algunos navegadores no entregan lista antes de permiso. Seguimos con constraints simples.
-      cameras = [];
-    }
-
-    if (cameras && cameras.length) {
-      const backWords = ['back', 'rear', 'environment', 'trasera', 'posterior', 'atrás', 'atras'];
-      const backCamera = cameras.find(c => backWords.some(w => (c.label || '').toLowerCase().includes(w)));
-      const selected = backCamera || cameras[cameras.length - 1] || cameras[0];
-      await startWith(selected.id, selected.label || 'cámara disponible');
-      return;
-    }
-
-    // Fallback muy compatible: sin width/height obligatorios, porque eso rompe permisos en varios celulares.
+    // Primero usamos constraints simples. Esto evita que iPhone tome telefoto o
+    // aplique recorte 16:9 que se siente como zoom.
     const constraintFallbacks = [
       { facingMode: { ideal: 'environment' } },
-      { facingMode: 'environment' },
-      { facingMode: { ideal: 'user' } },
-      true
+      { facingMode: 'environment' }
     ];
 
     let lastError = null;
     for (const cfg of constraintFallbacks) {
       try {
-        await startWith(cfg, 'modo compatible');
+        await startWith(cfg, 'vista amplia');
         return;
       } catch (err) {
         lastError = err;
       }
+    }
+
+    // Si el navegador no acepta constraints, usamos lista de cámaras.
+    // Ojo: no elegimos la última cámara porque en algunos iPhone es telefoto.
+    let cameras = [];
+    try {
+      cameras = await Html5Qrcode.getCameras();
+    } catch (err) {
+      cameras = [];
+    }
+
+    if (cameras && cameras.length) {
+      const badWords = ['tele', 'telephoto', 'zoom', 'macro', 'desk'];
+      const backWords = ['back', 'rear', 'environment', 'trasera', 'posterior', 'atrás', 'atras'];
+      const wideWords = ['wide', 'ultra', 'gran angular', 'angular'];
+      const labelOf = c => (c.label || '').toLowerCase();
+      const rear = cameras.filter(c => backWords.some(w => labelOf(c).includes(w)));
+      const pool = rear.length ? rear : cameras;
+      const notTele = pool.filter(c => !badWords.some(w => labelOf(c).includes(w)));
+      const wide = notTele.find(c => wideWords.some(w => labelOf(c).includes(w)));
+      const selected = wide || notTele[0] || pool[0] || cameras[0];
+      await startWith(selected.id, selected.label || 'cámara amplia');
+      return;
+    }
+
+    try {
+      await startWith(true, 'modo básico');
+      return;
+    } catch (err) {
+      lastError = err;
     }
     throw lastError;
   } catch (err) {
