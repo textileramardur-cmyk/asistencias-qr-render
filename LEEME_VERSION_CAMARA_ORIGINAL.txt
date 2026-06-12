@@ -1,0 +1,2 @@
+Versión completa con lógica depurada, pero cámara/vigilancia revertida a la versión estable original.
+Usar esta versión para recuperar la cámara antes de rediseñar de nuevo.

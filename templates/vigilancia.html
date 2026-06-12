@@ -1,117 +1,61 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="guard-app-v2" data-has-active-guard="{{ '1' if active_guard else '0' }}">
-  <div id="bigFeedback" class="guard-feedback hidden" aria-live="assertive">
-    <div class="guard-feedback-card">
-      <div id="feedbackIcon" class="feedback-icon">✓</div>
-      <h2 id="feedbackTitle">Registro guardado</h2>
-      <p id="feedbackText">Listo</p>
-    </div>
-  </div>
+<section class="capture-app">
+  <div class="capture-hero">
+    <div id="reader" class="capture-reader"></div>
+    <div class="capture-gradient"></div>
 
-  <section class="guard-camera-zone {{ '' if active_guard else 'needs-guard' }}" id="guardCameraZone">
-    <div id="reader" class="guard-reader"></div>
-    <div class="guard-camera-shade"></div>
-
-    <header class="guard-topbar-v2">
-      <div class="guard-brand-v2">
-        <span>MS</span>
-        <strong>Control de acceso</strong>
+    <header class="capture-topbar">
+      <div>
+        <span class="capture-brand">MS</span>
+        <strong>Captura de acceso</strong>
       </div>
-      <a class="guard-exit-v2" href="/logout">Salir</a>
+      <a class="capture-exit" href="/logout">Salir</a>
     </header>
 
-    <div id="activeGuardBox" class="guard-active-box {{ '' if active_guard else 'missing' }}">
-      <span class="guard-active-dot"></span>
+    <div id="activeGuardBox" class="capture-guard {{ '' if active_guard else 'missing' }}">
+      <span class="guard-dot"></span>
       <div>
         <small>Vigilante activo</small>
         <strong id="activeGuardName">{{ active_guard.display if active_guard else 'Escanea QR de vigilante' }}</strong>
-        <span id="activeGuardSince">{{ 'Desde ' ~ short_datetime(active_guard.started_at) if active_guard else 'Antes de registrar empleados' }}</span>
+        <span id="activeGuardSince">{{ 'Desde ' ~ short_datetime(active_guard.started_at) if active_guard else 'Necesario para registrar empleados' }}</span>
       </div>
     </div>
 
-    <div class="guard-main-instruction" id="guardMainInstruction">
-      {% if active_guard %}
-        <p>LISTO PARA CAPTURAR</p>
-        <h1>Escanea QR de empleado</h1>
-      {% else %}
-        <p>PASO 1</p>
-        <h1>Escanea QR de vigilante</h1>
-      {% endif %}
-      <div class="guard-frame-v2"><span></span><span></span><span></span><span></span></div>
-      <div id="scannerStatus" class="guard-status-pill">{{ active_user.username if active_user else 'Vigilancia' }} · esperando lectura.</div>
+    <div class="capture-center">
+      <p>Centra el código dentro del marco</p>
+      <div class="capture-frame"><span></span><span></span><span></span><span></span></div>
+      <h1>Escanear QR</h1>
     </div>
 
-    <div class="guard-actions-v2">
-      <button class="guard-big-btn primary" type="button" onclick="toggleScanner()">
-        <span>▣</span><strong id="cameraButtonText">Activar cámara</strong>
+    <div id="scannerStatus" class="capture-status">{{ active_user.username if active_user else 'Vigilancia' }} · escanea vigilante y después empleado.</div>
+
+    <div class="capture-actions">
+      <button class="capture-action primary" type="button" onclick="toggleScanner()">
+        <span>▣</span><strong>Activar cámara</strong>
       </button>
-      <button class="guard-big-btn" type="button" onclick="cycleCamera()">
-        <span>↻</span><strong>Cambiar cámara</strong>
-      </button>
-      <button class="guard-big-btn" type="button" onclick="toggleManualPanel()">
+      <button class="capture-action" type="button" onclick="toggleManualPanel()">
         <span>⌕</span><strong>ID manual</strong>
       </button>
-      <button class="guard-big-btn warning" type="button" onclick="toggleNoQrPanel()">
-        <span>!</span><strong>Sin QR</strong>
-      </button>
     </div>
-  </section>
+  </div>
 
-  <aside class="guard-side-v2">
-    <section class="guard-card-v2 guard-current-step">
-      <div class="step-pill {{ 'ok' if active_guard else 'warn' }}" id="stepGuardPill">1</div>
-      <div>
-        <strong id="stepGuardTitle">{{ 'Vigilante activo' if active_guard else 'Falta vigilante' }}</strong>
-        <p id="stepGuardText">{{ 'Ya puedes escanear empleados.' if active_guard else 'Escanea primero el QR del vigilante. Si no, el sistema no registra empleados.' }}</p>
+  <aside class="capture-panel">
+    <div class="capture-card manual-panel" id="manualPanel">
+      <div class="mini-title">
+        <span>01</span>
+        <div><strong>Código manual</strong><small>Empleado o vigilante</small></div>
       </div>
-    </section>
-
-    <section class="guard-card-v2 manual-panel-v2" id="manualPanel">
-      <div class="guard-card-head">
-        <div>
-          <small>Captura manual</small>
-          <h3>ID o código</h3>
-        </div>
-        <span class="soft-chip">Empleado / Vigilante</span>
-      </div>
-      <label class="clean-label">Código
-        <input id="employeeId" value="" placeholder="Escanea o escribe el ID" autocomplete="off" inputmode="text" />
+      <label class="clean-label">Código QR
+        <input id="employeeId" value="" placeholder="Escanea o escribe el código" autocomplete="off" inputmode="text" />
       </label>
       <input type="hidden" id="movementType" value="entrada" />
       <button class="btn primary full-btn" type="button" onclick="scanCode()">Validar código</button>
-      <p class="muted tiny">El sistema decide automáticamente si toca entrada o salida. El vigilante no elige, porque para eso existen las computadoras, aunque a veces se hagan las difíciles.</p>
-    </section>
+      <p class="muted tiny">El sistema identifica si el QR es de vigilante o empleado. Entrada/salida se decide automáticamente.</p>
+    </div>
 
-    <section class="guard-card-v2 noqr-panel-v2 hidden" id="noQrPanel">
-      <div class="guard-card-head">
-        <div>
-          <small>Excepción controlada</small>
-          <h3>Sin QR a la mano</h3>
-        </div>
-        <span class="soft-chip warn">Auditable</span>
-      </div>
-      <label>Motivo <span class="required">obligatorio</span>
-        <select id="noQrReason">
-          <option value="">Seleccionar motivo</option>
-          <option>No trae QR</option>
-          <option>QR dañado</option>
-          <option>QR no lee</option>
-          <option>Empleado nuevo</option>
-          <option>Autorizado por RH</option>
-          <option>Otro</option>
-        </select>
-      </label>
-      <label>Buscar por nombre o ID
-        <input id="noQrSearch" placeholder="Ej. Luis, Ana, 14" autocomplete="off" />
-      </label>
-      <button class="btn secondary full-btn" type="button" onclick="searchNoQrEmployees()">Buscar empleado</button>
-      <div id="noQrResults" class="noqr-results"></div>
-      <p class="muted tiny">El registro queda con observación “SIN QR” para revisión. Confianza, pero con rastro, porque tampoco vivimos en una novela fantástica.</p>
-    </section>
-
-    <section id="employeeCard" class="guard-card-v2 employee-confirm-v2 hidden">
-      <div class="employee-confirm-head">
+    <section id="employeeCard" class="capture-card employee-card-pro hidden">
+      <div class="employee-card-head mobile-pro">
         <div class="avatar-clean">👤</div>
         <div>
           <small class="eyebrow">Empleado detectado</small>
@@ -124,13 +68,7 @@
         </div>
       </div>
 
-      <div class="movement-banner" id="movementBanner">
-        <small>Movimiento detectado</small>
-        <strong id="movementTitle">ENTRADA</strong>
-        <span id="movementSubtitle">El sistema lo decidió automáticamente.</span>
-      </div>
-
-      <div class="status-box guard-eval-box" id="statusBox">
+      <div class="status-box" id="statusBox">
         <small>Evaluación automática</small>
         <strong id="evalStatus">-</strong>
         <p id="evalDetail">Turno y tolerancia configurables.</p>
@@ -149,21 +87,13 @@
         <input type="hidden" id="formGuardia" name="guardia" value="" />
         <input type="hidden" id="formConfirmacionOperativa" name="confirmacion_operativa" value="" />
 
-        <div class="vehicle-choice">
-          <span>¿Entró con vehículo?</span>
-          <label><input type="radio" name="vehiculo_choice" value="0" checked onchange="syncVehicleChoice()" /> No</label>
-          <label><input type="radio" name="vehiculo_choice" value="1" onchange="syncVehicleChoice()" /> Sí</label>
-          <input type="hidden" id="vehicleHidden" name="vehiculo" value="0" />
-        </div>
+        <label class="check-row compact">
+          <input type="checkbox" id="vehicleCheck" name="vehiculo" value="1" />
+          Con vehículo hoy
+        </label>
 
         <section id="latePanel" class="incident-panel hidden">
           <label>Motivo de retardo <span class="required">obligatorio</span></label>
-          <div class="quick-reasons" data-target="lateReason">
-            <button type="button" onclick="setQuickReason('lateReason','Tráfico')">Tráfico</button>
-            <button type="button" onclick="setQuickReason('lateReason','Transporte')">Transporte</button>
-            <button type="button" onclick="setQuickReason('lateReason','Permiso autorizado')">Permiso</button>
-            <button type="button" onclick="setQuickReason('lateReason','Cita médica')">Cita médica</button>
-          </div>
           <select name="motivo_retardo" id="lateReason">
             <option value="">Seleccionar motivo</option>
             <option>Tráfico</option>
@@ -177,12 +107,6 @@
 
         <section id="earlyPanel" class="incident-panel hidden">
           <label>Motivo de salida temprana <span class="required">obligatorio</span></label>
-          <div class="quick-reasons" data-target="earlyReason">
-            <button type="button" onclick="setQuickReason('earlyReason','Permiso autorizado')">Permiso</button>
-            <button type="button" onclick="setQuickReason('earlyReason','Cita médica')">Cita médica</button>
-            <button type="button" onclick="setQuickReason('earlyReason','Enfermedad')">Enfermedad</button>
-            <button type="button" onclick="setQuickReason('earlyReason','Comisión externa')">Comisión</button>
-          </div>
           <select name="motivo_salida_temprana" id="earlyReason">
             <option value="">Seleccionar motivo</option>
             <option>Permiso autorizado</option>
@@ -204,26 +128,17 @@
         </section>
 
         <label>Observaciones
-          <textarea id="observaciones" name="observaciones" rows="2" placeholder="Opcional"></textarea>
+          <textarea name="observaciones" rows="2" placeholder="Opcional"></textarea>
         </label>
 
         <div id="resultBox" class="result hidden"></div>
-        <button id="submitBtn" class="guard-confirm-btn" type="submit">CONFIRMAR ENTRADA</button>
-        <button class="btn secondary full-btn" type="button" onclick="cancelEmployee()">Cancelar</button>
+        <button id="submitBtn" class="btn primary full-btn sticky-action" type="submit">Registrar entrada</button>
       </form>
     </section>
 
-    <section class="guard-card-v2 last-movements-card">
-      <div class="guard-card-head">
-        <div>
-          <small>Confirmación visual</small>
-          <h3>Últimos movimientos</h3>
-        </div>
-        <button class="mini-refresh" type="button" onclick="loadLastMovements()">Actualizar</button>
-      </div>
-      <div id="lastMovementsList" class="last-movements-list">
-        <div class="last-empty">Cargando últimos registros...</div>
-      </div>
+    <section class="capture-card compact-help">
+      <strong>Regla operativa</strong>
+      <p>El vigilante solo escanea. El sistema decide entrada o salida y liga el movimiento al vigilante activo.</p>
     </section>
   </aside>
 </section>
@@ -236,8 +151,6 @@
     const form = document.getElementById('attendanceForm');
     form.addEventListener('submit', submitAttendance);
     setMovement('entrada', false);
-    loadLastMovements();
-    setInterval(loadLastMovements, 30000);
   });
 </script>
 {% endblock %}
