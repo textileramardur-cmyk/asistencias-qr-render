@@ -1,0 +1,5 @@
+VERSIÓN COMPLETA CON FIX DE CÁMARA COMPATIBLE
+
+Incluye la versión UX vigilancia + cámara limpia + fix de permisos/compatibilidad.
+
+La raíz debe quedar con main.py, requirements.txt, render.yaml, static/, templates/.

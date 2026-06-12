@@ -380,84 +380,130 @@ async function toggleScanner() {
   const btnText = byId('cameraButtonText');
   const cameraZone = byId('guardCameraZone');
 
+  const setStatus = (msg) => { if (status) status.innerText = msg; };
   const markCameraOff = () => {
     scannerRunning = false;
     cameraZone?.classList.remove('camera-active');
     if (btnText) btnText.innerText = 'Activar cámara';
   };
 
-  if (scannerRunning && scanner) {
-    try { await scanner.stop(); } catch (_) {}
+  async function stopScannerInstance() {
+    if (!scanner) return;
+    try {
+      if (scannerRunning) await scanner.stop();
+    } catch (_) {}
+    try { await scanner.clear(); } catch (_) {}
+    scanner = null;
     markCameraOff();
-    if (status) status.innerText = 'Cámara detenida. Puedes capturar ID manual.';
+  }
+
+  if (scannerRunning && scanner) {
+    await stopScannerInstance();
+    setStatus('Cámara detenida. Puedes capturar ID manual.');
     return;
   }
 
   if (!window.Html5Qrcode) {
-    showFeedback('error', 'CÁMARA NO DISPONIBLE', 'Usa captura manual del ID.');
+    showFeedback('error', 'CÁMARA NO DISPONIBLE', 'El lector QR no cargó. Usa captura manual del ID.');
     return;
   }
 
-  scanner = new Html5Qrcode(readerId);
+  const host = window.location.hostname || '';
+  const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(host);
+  if (window.location.protocol !== 'https:' && !isLocal) {
+    setStatus('La cámara requiere HTTPS. Abre la app desde el enlace https de Render.');
+    showFeedback('error', 'CÁMARA BLOQUEADA', 'El navegador solo permite cámara en sitios HTTPS.');
+    return;
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('Este navegador no permite cámara aquí. Usa ID manual.');
+    showFeedback('error', 'SIN SOPORTE DE CÁMARA', 'Prueba Safari/Chrome actualizado o captura ID manual.');
+    return;
+  }
+
   const onDecoded = async (decodedText) => {
     if (qrBusy) return;
     byId('employeeId').value = decodedText.trim();
-    if (status) status.innerText = 'QR leído. Validando...';
+    setStatus('QR leído. Validando...');
     await scanCode();
-    try { await scanner.stop(); } catch (_) {}
-    markCameraOff();
+    await stopScannerInstance();
   };
 
-  const scannerConfigs = [
-    {
-      camera: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30, max: 30 }
-      },
-      options: {
-        fps: 12,
-        qrbox: { width: 340, height: 340 },
-        aspectRatio: 1.7777778,
-        disableFlip: true,
-        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-      }
-    },
-    {
-      camera: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      options: { fps: 10, qrbox: { width: 320, height: 320 }, aspectRatio: 1.7777778, disableFlip: true }
-    },
-    {
-      camera: { facingMode: 'environment' },
-      options: { fps: 10, qrbox: { width: 300, height: 300 }, disableFlip: true }
-    }
+  const baseOptions = [
+    { fps: 10, qrbox: { width: 320, height: 320 }, disableFlip: true },
+    { fps: 8, qrbox: { width: 280, height: 280 }, disableFlip: true },
+    { fps: 6, disableFlip: true }
   ];
 
-  let lastError = null;
+  async function startWith(cameraConfig, label) {
+    for (const options of baseOptions) {
+      await stopScannerInstance();
+      scanner = new Html5Qrcode(readerId, { verbose: false });
+      await scanner.start(cameraConfig, options, onDecoded);
+      scannerRunning = true;
+      cameraZone?.classList.add('camera-active');
+      if (btnText) btnText.innerText = 'Detener cámara';
+      setStatus(`Cámara activa${label ? ' · ' + label : ''}. Acerca el QR al centro.`);
+      return true;
+    }
+    return false;
+  }
+
   try {
-    for (const cfg of scannerConfigs) {
+    setStatus('Solicitando permiso de cámara...');
+
+    // Primero intentamos con lista de cámaras. Es más compatible que exigir resolución HD.
+    let cameras = [];
+    try {
+      cameras = await Html5Qrcode.getCameras();
+    } catch (err) {
+      // Algunos navegadores no entregan lista antes de permiso. Seguimos con constraints simples.
+      cameras = [];
+    }
+
+    if (cameras && cameras.length) {
+      const backWords = ['back', 'rear', 'environment', 'trasera', 'posterior', 'atrás', 'atras'];
+      const backCamera = cameras.find(c => backWords.some(w => (c.label || '').toLowerCase().includes(w)));
+      const selected = backCamera || cameras[cameras.length - 1] || cameras[0];
+      await startWith(selected.id, selected.label || 'cámara disponible');
+      return;
+    }
+
+    // Fallback muy compatible: sin width/height obligatorios, porque eso rompe permisos en varios celulares.
+    const constraintFallbacks = [
+      { facingMode: { ideal: 'environment' } },
+      { facingMode: 'environment' },
+      { facingMode: { ideal: 'user' } },
+      true
+    ];
+
+    let lastError = null;
+    for (const cfg of constraintFallbacks) {
       try {
-        await scanner.start(cfg.camera, cfg.options, onDecoded);
-        scannerRunning = true;
-        cameraZone?.classList.add('camera-active');
-        if (btnText) btnText.innerText = 'Detener cámara';
-        if (status) status.innerText = 'Cámara limpia activa. Acerca el QR hasta verlo nítido.';
+        await startWith(cfg, 'modo compatible');
         return;
       } catch (err) {
         lastError = err;
-        try { await scanner.stop(); } catch (_) {}
       }
     }
     throw lastError;
   } catch (err) {
-    markCameraOff();
-    if (status) status.innerText = 'No se pudo abrir cámara. Revisa permisos o usa ID manual.';
-    showFeedback('error', 'SIN CÁMARA', 'Revisa permisos del navegador o escribe el ID manualmente.');
+    console.error('Camera start error:', err);
+    await stopScannerInstance();
+    const name = err?.name || '';
+    let message = 'No se pudo abrir cámara. Revisa permisos o usa ID manual.';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      message = 'Permiso de cámara denegado. Actívalo en el candado del navegador.';
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      message = 'No se encontró cámara disponible en este dispositivo.';
+    } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+      message = 'La cámara está ocupada por otra app o el navegador la bloqueó.';
+    } else if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+      message = 'La cámara no aceptó la configuración. Intenta de nuevo en modo compatible.';
+    }
+    setStatus(message);
+    showFeedback('error', 'SIN CÁMARA', message);
   }
 }
 
